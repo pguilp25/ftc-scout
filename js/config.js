@@ -11,6 +11,11 @@
 
 window.FTC = window.FTC || {};
 
+// Motif = a pattern of balls on the ramp. Each matching ball is worth 2 PATTERN
+// points (Game Manual §10.5.2). This builds the 1..9 buttons (2, 4, … 18 pts).
+const motifOptions = (n) =>
+  Array.from({ length: n }, (_, i) => ({ label: String(i + 1), score: (i + 1) * 2 }));
+
 FTC.CONFIG = {
   /* Shown in the header. */
   eventName: "FTC Edmonton Premier",
@@ -41,45 +46,51 @@ FTC.CONFIG = {
   // OVERFLOW 1 · PATTERN (artifact matches motif) 2 each · BASE partial 5 / full 10.
   metrics: [
     // ---- AUTONOMOUS ----
-    { id: "auto_leave",     label: "Left the launch line (LEAVE)", phase: "auto",
+    { id: "auto_leave",       label: "Left the launch line (LEAVE)", phase: "auto",
       type: "bool",   points: 3,  weight: 1 },
-    { id: "auto_artifacts", label: "Artifacts scored (auto)", phase: "auto",
+    // Artifacts split by where they land: CLASSIFIED (into the ramp) = 3 pts,
+    // OVERFLOW (didn't classify) = 1 pt.
+    { id: "auto_classified",  label: "Classified scored (auto)", phase: "auto",
       type: "number", points: 3,  norm: 6,  weight: 3 },
-    // Motif = a 3-color pattern; each completed repeat is 3 matching artifacts
-    // on the ramp = 6 pts (2 pts × 3). 1 / 2 / 3 = how many repeats they completed.
-    { id: "auto_motif",     label: "Motif sets matched", phase: "auto",
-      type: "select", style: "buttons", weight: 2,
-      options: [
-        { label: "1", score: 6  },
-        { label: "2", score: 12 },
-        { label: "3", score: 18 },
-      ] },
+    { id: "auto_overflow",    label: "Overflow scored (auto)", phase: "auto",
+      type: "number", points: 1,  norm: 6,  weight: 1 },
+    // How many balls matched the motif (1–9). Each matching ball = 2 pts.
+    { id: "auto_motif",       label: "Motif balls matched (auto)", phase: "auto",
+      type: "select", style: "buttons", weight: 2, options: motifOptions(9) },
 
     // ---- TELE-OP ----
-    { id: "tele_close", label: "Scored from close", phase: "teleop",
-      type: "number", points: 3,  norm: 15, weight: 2 },
-    { id: "tele_far",   label: "Scored from far", phase: "teleop",
-      type: "number", points: 3,  norm: 10, weight: 3 },
-    { id: "cycle_speed", label: "Cycle speed", phase: "teleop",
+    { id: "tele_classified",  label: "Classified scored (teleop)", phase: "teleop",
+      type: "number", points: 3,  norm: 20, weight: 3 },
+    { id: "tele_overflow",    label: "Overflow scored (teleop)", phase: "teleop",
+      type: "number", points: 1,  norm: 15, weight: 1 },
+    { id: "cycle_speed",      label: "Cycle speed", phase: "teleop",
       type: "rating", max: 5, weight: 2 },
 
     // ---- ENDGAME (BASE) ----
-    { id: "endgame",    label: "Returned to base", phase: "endgame",
+    { id: "endgame",          label: "Returned to base", phase: "endgame",
       type: "select", weight: 3,
       options: [
         { label: "Nothing",      score: 0  },
         { label: "Partial park", score: 5  },
         { label: "Full park",    score: 10 },
       ] },
+    // Can the robot climb/ascend into the base? (capability flag, no direct points)
+    { id: "endgame_climb",    label: "Robot climbs into base?", phase: "endgame",
+      type: "bool", weight: 2 },
+    // End-of-match motif, same idea as auto (1–9 balls, 2 pts each).
+    { id: "endgame_motif",    label: "Motif balls matched (endgame)", phase: "endgame",
+      type: "select", style: "buttons", weight: 2, options: motifOptions(9) },
 
     // ---- QUALITATIVE (judgement calls — not part of the point estimate) ----
-    // Crashed is a NEGATIVE: "Yes" counts against a team in the ranking.
+    // Crashed & penalties are NEGATIVES: "Yes"/high counts AGAINST a team.
     { id: "crashed",      label: "Broke down / crashed?", phase: "qual",
       type: "bool", higherIsBetter: false, weight: 2 },
     { id: "driver_skill", label: "Driver skill", phase: "qual",
       type: "rating", max: 5, weight: 2 },
     { id: "defense",      label: "Defense played", phase: "qual",
       type: "rating", max: 5, weight: 1 },
+    { id: "penalties",    label: "Drivers cause penalties?", phase: "qual",
+      type: "rating", max: 5, higherIsBetter: false, weight: 1 },
     { id: "notes",        label: "Notes", phase: "qual", type: "text" },
   ],
 

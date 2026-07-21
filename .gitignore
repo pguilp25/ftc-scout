@@ -11,3 +11,6 @@ node_modules/
 
 # exported scouting data backups (keep these off the public repo)
 ftc-scouting-*.json
+
+# scanned annotation image
+1000001101.jpg

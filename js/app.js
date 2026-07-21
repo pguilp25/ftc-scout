@@ -3,11 +3,23 @@
  * Plain DOM, event-delegated. Rendered as HTML strings for clarity.
  * ===========================================================================*/
 (function () {
-  const C = FTC.CONFIG, S = FTC.Stats, CH = FTC.Charts, DB = FTC.Store;
+  const C = FTC.CONFIG, S = FTC.Stats, CH = FTC.Charts, DB = FTC.Store, T = FTC.Teams;
   const $ = (sel, root = document) => root.querySelector(sel);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const round = (n) => (Math.abs(n % 1) < 0.05 ? Math.round(n) : n.toFixed(1));
+
+  // "17070 — EVOLUTION" when the name is known, otherwise just the number.
+  const teamLabel = (num) => {
+    const nm = T.nameOf(num);
+    return nm ? esc(num) + " — " + esc(nm) : esc(num);
+  };
+
+  // Load records AND warm the team-name cache, so lists render with names.
+  async function loadData() {
+    await DB.load();
+    await T.ensure(DB.all().map((r) => r.team));
+  }
 
   /* ---- state ---- */
   const state = {
@@ -65,7 +77,8 @@
       <p class="muted">Fill this in while you watch the team you're scouting, then Save. Each save is one match.</p>
       <div class="grid2">
         <div class="field"><label>Team # you're scouting</label>
-          <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off"></div>
+          <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off">
+          <div id="teamNameHint" class="muted" style="font-size:13px;margin-top:4px;min-height:18px"></div></div>
         <div class="field"><label>Match (optional)</label>
           <input id="f_match" placeholder="e.g. Q12" autocomplete="off"></div>
       </div>
@@ -150,7 +163,7 @@
     const btn = $("#refreshBtn");
     const old = btn ? btn.textContent : "";
     if (btn) { btn.textContent = "…"; btn.disabled = true; }
-    await DB.load();
+    await loadData();
     render();
     if (btn) { btn.textContent = old; btn.disabled = false; }
   }
@@ -168,7 +181,7 @@
     const rows = ranked.length ? ranked.map((t, i) => `
       <tr data-team="${esc(t.team)}">
         <td><span class="rank-badge">${i + 1}</span></td>
-        <td><strong>${esc(t.team)}</strong></td>
+        <td><strong>${teamLabel(t.team)}</strong></td>
         <td>${fitBar(t.fit)}</td>
         <td class="num">${round(t.avgScore)}</td>
         <td class="num">${t.matches}</td>
@@ -236,7 +249,7 @@
     const rows = ranked.length ? ranked.map((t, i) => `
       <tr data-team="${esc(t.team)}">
         <td><span class="rank-badge">${i + 1}</span></td>
-        <td><strong>${esc(t.team)}</strong></td>
+        <td><strong>${teamLabel(t.team)}</strong></td>
         <td class="num">${round(t.value)}${esc(cur.suffix)}</td>
         <td class="num">${t.matches}</td>
       </tr>`).join("") :
@@ -276,7 +289,7 @@
     const arrow = (c) => state.sort.col === c ? (dir < 0 ? " ▾" : " ▴") : "";
     const rows = teams.length ? teams.map((t) => `
       <tr data-team="${esc(t.team)}">
-        <td><strong>${esc(t.team)}</strong></td>
+        <td><strong>${teamLabel(t.team)}</strong></td>
         <td class="num">${t.matches}</td>
         <td class="num">${round(t.avgScore)}</td>
         <td class="num">${round(t.maxScore)}</td>
@@ -325,11 +338,13 @@
     })).filter((b) => C.metrics.some((m) => m.phase === b0(b)));
 
     // ratings & rates profile
+    // Each bar carries its own `max` so lengths are comparable: a 5/5 rating and
+    // an 80% rate both fill (or nearly fill) the bar instead of one dwarfing the other.
     const profile = C.metrics.filter((m) => m.type === "rating" || m.type === "bool").map((m) => {
       const val = agg.perMetric[m.id] || 0;
       return m.type === "rating"
-        ? { label: m.label, value: val, suffix: "/" + (m.max || 5) }
-        : { label: m.label, value: Math.round(val * 100), suffix: "%" };
+        ? { label: m.label, value: val, suffix: "/" + (m.max || 5), max: (m.max || 5) }
+        : { label: m.label, value: Math.round(val * 100), suffix: "%", max: 100 };
     });
 
     const fit = S.fitScore(C, agg, state.weights);
@@ -345,7 +360,7 @@
     return `<div class="card">
       <div class="row">
         <button class="btn" data-action="back">← Back</button>
-        <h2 style="margin:0">Team ${esc(team)}</h2>
+        <h2 style="margin:0">Team ${teamLabel(team)}</h2>
       </div>
       <div class="kpis" style="margin-top:14px">
         <div class="kpi"><div class="n">${round(agg.avgScore)}</div><div class="l">Avg points</div></div>
@@ -374,7 +389,7 @@
       state.view = d.nav; render();
       // pull everyone's latest when opening a data view (collaborative)
       if (DB.mode() === "cloud" && d.nav !== "scout")
-        DB.load().then(() => { if (state.view === d.nav) render(); });
+        loadData().then(() => { if (state.view === d.nav) render(); });
       return;
     }
     if (d.action === "refresh") { doRefresh(); return; }
@@ -436,6 +451,24 @@
       return;
     }
     if (t.id === "f_search") { state.search = t.value; render(); return; }
+    if (t.id === "f_team") { scheduleTeamLookup(t.value); return; }
+  }
+
+  // Look up the team name as the scout types the number (debounced), and show it.
+  function scheduleTeamLookup(num) {
+    clearTimeout(scheduleTeamLookup._t);
+    const hint = $("#teamNameHint");
+    const n = (num || "").trim();
+    if (!n) { if (hint) hint.textContent = ""; return; }
+    const cached = T.nameOf(n);
+    if (cached) { if (hint) hint.textContent = "✓ " + cached; return; }
+    if (hint) hint.textContent = "looking up…";
+    scheduleTeamLookup._t = setTimeout(async () => {
+      const nm = await T.fetchOne(n);
+      const h = $("#teamNameHint");
+      if (!h) return;
+      h.textContent = nm ? "✓ " + nm : "team not found — you can still save";
+    }, 400);
   }
 
   function onChange(e) {
@@ -476,7 +509,7 @@
     document.addEventListener("input", onInput);
     document.addEventListener("change", onChange);
 
-    await DB.load();
+    await loadData();
     render();
   }
 

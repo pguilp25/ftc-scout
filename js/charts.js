@@ -54,7 +54,10 @@
     const vMax = NICE(Math.max(1, ...items.map((d) => d.value)));
     const rows = items.map((d, i) => {
       const cy = P.t + i * rowH;
-      const w = (d.value / vMax) * iw;
+      // Each bar can carry its own `max` (e.g. a rating out of 5) so its length
+      // reflects its share of ITS OWN scale — a 5/5 fills the bar just like 100%.
+      const scaleMax = d.max || vMax;
+      const w = (d.value / scaleMax) * iw;
       const color = d.color || `var(--series-${(i % 8) + 1})`;
       return `
         <text x="${P.l - 8}" y="${cy + 20}" class="axis" text-anchor="end">${esc(d.label)}</text>
