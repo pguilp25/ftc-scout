@@ -1,0 +1,13 @@
+# macOS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# local tooling
+node_modules/
+.vercel/
+
+# exported scouting data backups (keep these off the public repo)
+ftc-scouting-*.json

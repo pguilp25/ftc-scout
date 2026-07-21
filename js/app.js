@@ -1,0 +1,469 @@
+/* =============================================================================
+ * APP — all the UI. Reads FTC.CONFIG, uses FTC.Store / FTC.Stats / FTC.Charts.
+ * Plain DOM, event-delegated. Rendered as HTML strings for clarity.
+ * ===========================================================================*/
+(function () {
+  const C = FTC.CONFIG, S = FTC.Stats, CH = FTC.Charts, DB = FTC.Store;
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const round = (n) => (Math.abs(n % 1) < 0.05 ? Math.round(n) : n.toFixed(1));
+
+  /* ---- state ---- */
+  const state = {
+    view: "scout",
+    team: null,
+    form: {},                 // in-progress scout values
+    weights: loadWeights(),
+    sort: { col: "fit", dir: -1 },
+    search: "",
+    leaderStat: "total",
+  };
+
+  function loadWeights() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem("ftc_weights_v1")) || {}; } catch {}
+    const w = {};
+    C.metrics.forEach((m) => { if (m.type !== "text") w[m.id] = saved[m.id] != null ? saved[m.id] : (m.weight || 0); });
+    return w;
+  }
+  function saveWeights() { localStorage.setItem("ftc_weights_v1", JSON.stringify(state.weights)); }
+
+  const metric = (id) => C.metrics.find((m) => m.id === id);
+  const phaseLabel = (id) => (FTC.PHASES.find((p) => p.id === id) || {}).label || id;
+
+  /* ============================ RENDER ==================================== */
+  function render() {
+    setActiveTab();
+    const main = $("#main");
+    if (state.view === "scout")   main.innerHTML = viewScout();
+    else if (state.view === "ranking") main.innerHTML = viewRanking();
+    else if (state.view === "leaders") main.innerHTML = viewLeaders();
+    else if (state.view === "teams")   main.innerHTML = viewTeams();
+    else if (state.view === "team")    main.innerHTML = viewTeam(state.team);
+    // restore scout widget state after (re)render
+    if (state.view === "teams" && state.search) {
+      const s = $("#f_search"); if (s) { s.focus(); s.value = state.search; }
+    }
+  }
+
+  function setActiveTab() {
+    document.querySelectorAll("nav button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.nav === (state.view === "team" ? "teams" : state.view)));
+  }
+
+  /* ---------------------------- SCOUT ------------------------------------ */
+  function viewScout() {
+    const groups = FTC.PHASES.map((ph) => {
+      const fields = C.metrics.filter((m) => m.phase === ph.id).map(fieldHTML).join("");
+      if (!fields) return "";
+      return `<div class="phase-group"><h3>${esc(ph.label)}</h3><div class="grid2">${fields}</div></div>`;
+    }).join("");
+
+    return `<div class="card">
+      <h2>Scout a match</h2>
+      <p class="muted">Fill this in while you watch the team you're scouting, then Save. Each save is one match.</p>
+      <div class="grid2">
+        <div class="field"><label>Team # you're scouting</label>
+          <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off"></div>
+        <div class="field"><label>Match (optional)</label>
+          <input id="f_match" placeholder="e.g. Q12" autocomplete="off"></div>
+      </div>
+      <div class="field"><label>Your name (scout)</label>
+        <input id="f_scout" placeholder="who's filling this in" autocomplete="off"></div>
+      ${groups}
+      <div class="row" style="margin-top:16px">
+        <button class="btn primary" data-action="save">Save match</button>
+        <span id="toast" class="muted"></span>
+      </div>
+    </div>`;
+  }
+
+  function fieldHTML(m) {
+    const v = state.form[m.id];
+    if (m.type === "number") {
+      const val = v || 0;
+      return `<div class="field"><label>${esc(m.label)}</label>
+        <div class="stepper">
+          <button data-step="${m.id}" data-dir="-1">−</button>
+          <span class="v" id="v_${m.id}">${val}</span>
+          <button data-step="${m.id}" data-dir="1">+</button>
+        </div></div>`;
+    }
+    if (m.type === "rating") {
+      const max = m.max || 5;
+      const btns = Array.from({ length: max }, (_, i) => i + 1).map((n) =>
+        `<button data-rate="${m.id}" data-val="${n}" class="${v === n ? "on" : ""}">${n}</button>`).join("");
+      return `<div class="field"><label>${esc(m.label)} <span class="muted">(1–${max})</span></label>
+        <div class="rating" id="r_${m.id}">${btns}</div></div>`;
+    }
+    if (m.type === "bool") {
+      const yes = v === true, no = v === false;
+      return `<div class="field"><label>${esc(m.label)}</label>
+        <div class="segmented" id="t_${m.id}">
+          <button data-boolval="${m.id}" data-v="0" class="${no ? "on" : ""}">No</button>
+          <button data-boolval="${m.id}" data-v="1" class="${yes ? "on" : ""}">Yes</button>
+        </div></div>`;
+    }
+    if (m.type === "select") {
+      if (m.style === "buttons") {
+        const btns = (m.options || []).map((o) =>
+          `<button data-choice="${m.id}" data-val="${esc(o.label)}" class="${v === o.label ? "on" : ""}">${esc(o.label)}</button>`).join("");
+        return `<div class="field"><label>${esc(m.label)}</label>
+          <div class="rating" id="c_${m.id}">${btns}</div></div>`;
+      }
+      const opts = (m.options || []).map((o) =>
+        `<option value="${esc(o.label)}"${v === o.label ? " selected" : ""}>${esc(o.label)}</option>`).join("");
+      return `<div class="field"><label>${esc(m.label)}</label>
+        <select id="s_${m.id}" data-select="${m.id}">${opts}</select></div>`;
+    }
+    if (m.type === "text") {
+      return `<div class="field" style="grid-column:1/-1"><label>${esc(m.label)}</label>
+        <textarea id="x_${m.id}">${esc(v || "")}</textarea></div>`;
+    }
+    return "";
+  }
+
+  async function saveMatch() {
+    const team = ($("#f_team").value || "").trim();
+    if (!team) { toast("Enter a team number first."); $("#f_team").focus(); return; }
+    const values = {};
+    C.metrics.forEach((m) => {
+      if (m.type === "number" || m.type === "rating") values[m.id] = state.form[m.id] || (m.type === "number" ? 0 : null);
+      else if (m.type === "bool") values[m.id] = !!state.form[m.id];
+      else if (m.type === "select") { const el = $("#s_" + m.id); values[m.id] = el ? el.value : (state.form[m.id] != null ? state.form[m.id] : null); }
+      else if (m.type === "text") { const el = $("#x_" + m.id); values[m.id] = el ? el.value.trim() : ""; }
+    });
+    const match = ($("#f_match").value || "").trim();
+    const scout = ($("#f_scout").value || "").trim();
+    const rec = await DB.add({ team, match, scout, values });
+    // reset numeric fields for the next match, keep scout name
+    state.form = {};
+    render();
+    $("#f_scout").value = scout;
+    toast(`Saved ${rec.team}${match ? " · " + match : ""}. ${DB.all().filter(r=>r.team===team).length} match(es) for this team.`);
+  }
+
+  function toast(msg) { const t = $("#toast"); if (t) t.textContent = msg; }
+
+  /* ---------------------------- RANKING ---------------------------------- */
+  function viewRanking() {
+    const ranked = S.rankTeams(C, DB.all(), state.weights);
+    const sliders = C.metrics.filter((m) => m.type !== "text").map((m) => `
+      <div class="weight-row">
+        <label for="w_${m.id}">${esc(m.label)} <span class="muted">· ${esc(phaseLabel(m.phase))}</span></label>
+        <input type="range" id="w_${m.id}" min="0" max="5" step="1" value="${state.weights[m.id]}" data-weight="${m.id}">
+        <span class="wv" id="wv_${m.id}">${state.weights[m.id]}</span>
+      </div>`).join("");
+
+    const rows = ranked.length ? ranked.map((t, i) => `
+      <tr data-team="${esc(t.team)}">
+        <td><span class="rank-badge">${i + 1}</span></td>
+        <td><strong>${esc(t.team)}</strong></td>
+        <td>${fitBar(t.fit)}</td>
+        <td class="num">${round(t.avgScore)}</td>
+        <td class="num">${t.matches}</td>
+      </tr>`).join("") :
+      `<tr><td colspan="5" class="empty-state">No teams scouted yet — go to <strong>Scout</strong> and add a match.</td></tr>`;
+
+    return `<div class="card">
+      <h2>Best teams for us <span class="muted">(team ${esc(C.myTeam)})</span></h2>
+      <p class="muted">Slide up what you want in an alliance partner. Value a strong auto if yours is weak;
+        drop defense to 0 if you don't care. The ranking re-sorts live.</p>
+      ${sliders}
+      <div class="row"><button class="btn" data-action="reset-weights">Reset to defaults</button></div>
+    </div>
+    <div class="card">
+      <div class="table-scroll"><table><thead><tr>
+        <th>#</th><th>Team</th><th>Fit for us</th><th class="num">Avg pts</th><th class="num">Matches</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
+  }
+
+  function fitBar(fit) {
+    const w = Math.max(2, Math.round(fit));
+    return `<div style="display:flex;align-items:center;gap:8px">
+      <div style="flex:1;height:8px;background:var(--plane);border-radius:999px;overflow:hidden;min-width:80px">
+        <div style="width:${w}%;height:100%;background:var(--accent)"></div></div>
+      <span style="font-variant-numeric:tabular-nums;color:var(--ink2);min-width:34px;text-align:right">${Math.round(fit)}</span>
+    </div>`;
+  }
+
+  /* ---------------------------- LEADERS ---------------------------------- */
+  // Which stats you can rank teams by: total points + every numeric metric.
+  function statOptions() {
+    const opts = [{ key: "total", label: "Total points (avg)", suffix: "" }];
+    C.metrics.forEach((m) => {
+      if (m.type === "text") return;
+      const suffix = m.type === "bool" ? "%" : m.type === "rating" ? "/" + (m.max || 5) : "";
+      opts.push({ key: m.id, label: m.label, suffix });
+    });
+    return opts;
+  }
+  function statValue(agg, key) {
+    if (key === "total") return agg.avgScore;
+    const m = metric(key);
+    const val = agg.perMetric[key] || 0;
+    return m && m.type === "bool" ? val * 100 : val; // bool → % of matches
+  }
+
+  function viewLeaders() {
+    const teams = S.allTeams(C, DB.all());
+    const opts = statOptions();
+    const cur = opts.find((o) => o.key === state.leaderStat) || opts[0];
+    const ranked = teams
+      .map((t) => ({ team: t.team, matches: t.matches, value: statValue(t, cur.key) }))
+      .sort((a, b) => b.value - a.value);
+
+    // Chart shows EVERY team (only teams with a value), in a scroll box so it
+    // stays on-screen even with 50 teams.
+    const barTeams = ranked.filter((t) => t.value > 0);
+    const bars = barTeams.map((t, i) =>
+      ({ label: t.team, value: t.value, suffix: cur.suffix, color: `var(--series-${(i % 8) + 1})` }));
+
+    const select = `<select id="leaderStat">${opts.map((o) =>
+      `<option value="${o.key}"${o.key === cur.key ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
+
+    const rows = ranked.length ? ranked.map((t, i) => `
+      <tr data-team="${esc(t.team)}">
+        <td><span class="rank-badge">${i + 1}</span></td>
+        <td><strong>${esc(t.team)}</strong></td>
+        <td class="num">${round(t.value)}${esc(cur.suffix)}</td>
+        <td class="num">${t.matches}</td>
+      </tr>`).join("") :
+      `<tr><td colspan="4" class="empty-state">No teams scouted yet — add a match under <strong>Scout</strong>.</td></tr>`;
+
+    return `<div class="card">
+      <div class="row">
+        <h2 style="margin:0">Leaders</h2>
+        <span style="margin-left:auto">${select}</span>
+      </div>
+      <p class="muted">Pick a stat to rank teams by it — the chart and list both update. Scroll to see all teams; tap a team for its breakdown.</p>
+      <div class="chart-scroll">${CH.bars(bars, { title: cur.label })}</div>
+    </div>
+    <div class="card">
+      <div class="table-scroll"><table><thead><tr>
+        <th>#</th><th>Team</th><th class="num">${esc(cur.label)}</th><th class="num">Matches</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
+  }
+
+  /* ---------------------------- TEAMS LIST ------------------------------- */
+  function viewTeams() {
+    let teams = S.allTeams(C, DB.all());
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      teams = teams.filter((t) => t.team.toLowerCase().includes(q));
+    }
+    const col = state.sort.col, dir = state.sort.dir;
+    const keyOf = (t) => col === "team" ? t.team : col === "matches" ? t.matches
+      : col === "fit" ? S.fitScore(C, t, state.weights) : t.avgScore;
+    teams.sort((a, b) => {
+      const ka = keyOf(a), kb = keyOf(b);
+      if (typeof ka === "string") return dir * ka.localeCompare(kb);
+      return dir * (ka - kb);
+    });
+
+    const arrow = (c) => state.sort.col === c ? (dir < 0 ? " ▾" : " ▴") : "";
+    const rows = teams.length ? teams.map((t) => `
+      <tr data-team="${esc(t.team)}">
+        <td><strong>${esc(t.team)}</strong></td>
+        <td class="num">${t.matches}</td>
+        <td class="num">${round(t.avgScore)}</td>
+        <td class="num">${round(t.maxScore)}</td>
+        <td class="num">${round(S.fitScore(C, t, state.weights))}</td>
+      </tr>`).join("") :
+      `<tr><td colspan="5" class="empty-state">No teams match.</td></tr>`;
+
+    return `<div class="card">
+      <div class="row">
+        <h2 style="margin:0">All teams</h2>
+        <input id="f_search" placeholder="filter team #" style="max-width:180px;margin-left:auto" value="${esc(state.search)}">
+      </div>
+      <p class="muted">Tap a column to sort. Tap a team to open its full breakdown.</p>
+      <div class="table-scroll"><table><thead><tr>
+        <th data-sort="team">Team${arrow("team")}</th>
+        <th class="num" data-sort="matches">Matches${arrow("matches")}</th>
+        <th class="num" data-sort="avgScore">Avg pts${arrow("avgScore")}</th>
+        <th class="num" data-sort="avgScore">Best${arrow("best")}</th>
+        <th class="num" data-sort="fit">Fit${arrow("fit")}</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>Data</h2>
+      <p class="muted">Mode: <span class="pill">${DB.mode() === "cloud" ? "☁ Shared (Supabase)" : "This device only"}</span>
+        ${DB.mode() === "local" ? " — set up Supabase (see README) to share across scouts." : ""}</p>
+      <div class="row">
+        <button class="btn" data-action="export">Export data (.json)</button>
+        <button class="btn" data-action="import">Import data</button>
+        <input type="file" id="importfile" accept="application/json" style="display:none">
+      </div>
+    </div>`;
+  }
+
+  /* ---------------------------- TEAM DETAIL ------------------------------ */
+  function viewTeam(team) {
+    const agg = S.aggregateTeam(C, team, DB.all());
+    if (!agg.matches) return `<div class="card empty-state">No data for ${esc(team)}.</div>`;
+
+    // trend
+    const trend = agg.records.map((r, i) => ({ label: r.match || "M" + (i + 1), y: Math.round(S.matchScore(C, r)) }));
+    // phase breakdown (avg points per phase)
+    const phaseBars = ["auto", "teleop", "endgame"].map((p, i) => ({
+      label: phaseLabel(p),
+      value: S.avg(agg.records.map((r) => S.phaseScore(C, r, p))),
+      color: `var(--series-${i + 1})`,
+    })).filter((b) => C.metrics.some((m) => m.phase === b0(b)));
+
+    // ratings & rates profile
+    const profile = C.metrics.filter((m) => m.type === "rating" || m.type === "bool").map((m) => {
+      const val = agg.perMetric[m.id] || 0;
+      return m.type === "rating"
+        ? { label: m.label, value: val, suffix: "/" + (m.max || 5) }
+        : { label: m.label, value: Math.round(val * 100), suffix: "%" };
+    });
+
+    const fit = S.fitScore(C, agg, state.weights);
+    const log = agg.records.slice().reverse().map((r) => `
+      <tr>
+        <td>${esc(r.match || "—")}</td>
+        <td class="num">${Math.round(S.matchScore(C, r))}</td>
+        <td class="muted">${esc(r.scout || "")}</td>
+        <td>${esc((r.values.notes || "").slice(0, 60))}</td>
+        <td class="num"><button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button></td>
+      </tr>`).join("");
+
+    return `<div class="card">
+      <div class="row">
+        <button class="btn" data-action="back">← Back</button>
+        <h2 style="margin:0">Team ${esc(team)}</h2>
+      </div>
+      <div class="kpis" style="margin-top:14px">
+        <div class="kpi"><div class="n">${round(agg.avgScore)}</div><div class="l">Avg points</div></div>
+        <div class="kpi"><div class="n">${round(agg.maxScore)}</div><div class="l">Best game</div></div>
+        <div class="kpi"><div class="n">±${round(agg.consistency)}</div><div class="l">Consistency (σ)</div></div>
+        <div class="kpi"><div class="n">${Math.round(fit)}</div><div class="l">Fit for us</div></div>
+      </div>
+    </div>
+    <div class="card"><h2>Score by match</h2>${CH.line(trend)}</div>
+    <div class="card"><h2>Where the points come from</h2>${CH.bars(phaseBars, { title: "Phase breakdown" })}</div>
+    ${profile.length ? `<div class="card"><h2>Ratings & rates</h2>${CH.bars(profile, { title: "Profile" })}</div>` : ""}
+    <div class="card"><h2>Match log</h2>
+      <table><thead><tr><th>Match</th><th class="num">Pts</th><th>Scout</th><th>Notes</th><th></th></tr></thead>
+      <tbody>${log}</tbody></table>
+    </div>`;
+  }
+  const b0 = (b) => ({ "Autonomous": "auto", "Tele-Op": "teleop", "Endgame": "endgame" }[b.label] || b.label);
+
+  /* ============================ EVENTS ==================================== */
+  function onClick(e) {
+    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del]");
+    if (!t) return;
+    const d = t.dataset;
+
+    if (d.nav) { state.view = d.nav; render(); return; }
+    if (d.action === "save") { saveMatch(); return; }
+    if (d.action === "back") { state.view = "teams"; render(); return; }
+    if (d.action === "reset-weights") {
+      C.metrics.forEach((m) => { if (m.type !== "text") state.weights[m.id] = m.weight || 0; });
+      saveWeights(); render(); return;
+    }
+    if (d.action === "theme") { toggleTheme(); return; }
+    if (d.action === "export") { doExport(); return; }
+    if (d.action === "import") { $("#importfile").click(); return; }
+
+    if (d.step) {
+      const m = metric(d.step);
+      const cur = state.form[d.step] || 0;
+      const next = Math.max(0, cur + (d.dir === "1" ? 1 : -1));
+      state.form[d.step] = next;
+      $("#v_" + d.step).textContent = next;
+      return;
+    }
+    if (d.rate) {
+      const id = d.rate, val = +d.val;
+      state.form[id] = state.form[id] === val ? null : val; // tap again to clear
+      document.querySelectorAll(`#r_${id} button`).forEach((b) =>
+        b.classList.toggle("on", +b.dataset.val === state.form[id]));
+      return;
+    }
+    if (d.boolval) {
+      const id = d.boolval; state.form[id] = d.v === "1";
+      document.querySelectorAll(`#t_${id} button`).forEach((b) =>
+        b.classList.toggle("on", b.dataset.v === d.v));
+      return;
+    }
+    if (d.choice) {
+      const id = d.choice, val = d.val;
+      state.form[id] = state.form[id] === val ? null : val; // tap again to clear
+      document.querySelectorAll(`#c_${id} button`).forEach((b) =>
+        b.classList.toggle("on", b.dataset.val === state.form[id]));
+      return;
+    }
+    if (d.del) { if (confirm("Delete this match record?")) DB.remove(d.del).then(render); return; }
+    if (d.sort) {
+      state.sort = state.sort.col === d.sort
+        ? { col: d.sort, dir: -state.sort.dir } : { col: d.sort, dir: -1 };
+      render(); return;
+    }
+    if (d.team) { state.team = d.team; state.view = "team"; render(); return; }
+  }
+
+  function onInput(e) {
+    const t = e.target;
+    if (t.dataset.weight) {
+      state.weights[t.dataset.weight] = +t.value;
+      const lab = $("#wv_" + t.dataset.weight); if (lab) lab.textContent = t.value;
+      saveWeights();
+      clearTimeout(onInput._t);
+      onInput._t = setTimeout(() => { if (state.view === "ranking") render(); }, 150);
+      return;
+    }
+    if (t.id === "f_search") { state.search = t.value; render(); return; }
+  }
+
+  function onChange(e) {
+    if (e.target.id === "leaderStat") { state.leaderStat = e.target.value; render(); return; }
+    if (e.target.id === "importfile" && e.target.files[0]) {
+      const rd = new FileReader();
+      rd.onload = () => DB.importJSON(rd.result).then((n) => { alert("Imported. Total records: " + n); render(); })
+        .catch((err) => alert("Import failed: " + err.message));
+      rd.readAsText(e.target.files[0]);
+    }
+  }
+
+  function doExport() {
+    const blob = new Blob([DB.exportJSON()], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ftc-scouting-" + C.myTeam + ".json";
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  function toggleTheme() {
+    const cur = document.documentElement.getAttribute("data-theme");
+    const next = cur === "dark" ? "light" : cur === "light" ? "" : "dark";
+    if (next) document.documentElement.setAttribute("data-theme", next);
+    else document.documentElement.removeAttribute("data-theme");
+    localStorage.setItem("ftc_theme", next);
+  }
+
+  /* ============================ BOOT ===================================== */
+  async function boot() {
+    const saved = localStorage.getItem("ftc_theme");
+    if (saved) document.documentElement.setAttribute("data-theme", saved);
+
+    $("#eventName").textContent = C.eventName;
+    $("#modeBadge").textContent = DB.mode() === "cloud" ? "☁ shared" : "◐ this device";
+
+    document.addEventListener("click", onClick);
+    document.addEventListener("input", onInput);
+    document.addEventListener("change", onChange);
+
+    await DB.load();
+    render();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+})();
