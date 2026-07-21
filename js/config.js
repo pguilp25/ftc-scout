@@ -59,11 +59,18 @@ FTC.CONFIG = {
       type: "select", style: "buttons", weight: 2, options: motifOptions(9) },
 
     // ---- TELE-OP ----
-    { id: "tele_classified",  label: "Classified scored (teleop)", phase: "teleop",
-      type: "number", points: 3,  norm: 20, weight: 3 },
-    { id: "tele_overflow",    label: "Overflow scored (teleop)", phase: "teleop",
-      type: "number", points: 1,  norm: 15, weight: 1 },
-    { id: "cycle_speed",      label: "Cycle speed", phase: "teleop",
+    // Scored balls split BOTH ways: distance (close/far) AND classified vs overflow.
+    // Classified = 3 pts, Overflow = 1 pt. Keeping "close" lets you spot robots that
+    // can score up close (useful when picking an alliance partner).
+    { id: "tele_close_classified", label: "Close — classified", phase: "teleop",
+      type: "number", points: 3, norm: 12, weight: 2 },
+    { id: "tele_close_overflow",   label: "Close — overflow", phase: "teleop",
+      type: "number", points: 1, norm: 12, weight: 1 },
+    { id: "tele_far_classified",   label: "Far — classified", phase: "teleop",
+      type: "number", points: 3, norm: 8,  weight: 3 },
+    { id: "tele_far_overflow",     label: "Far — overflow", phase: "teleop",
+      type: "number", points: 1, norm: 8,  weight: 1 },
+    { id: "cycle_speed",           label: "Cycle speed", phase: "teleop",
       type: "rating", max: 5, weight: 2 },
 
     // ---- ENDGAME (BASE) ----

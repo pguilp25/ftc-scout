@@ -9,6 +9,12 @@
   const API = "https://api.ftcscout.org/rest/v1/teams/";
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(LS)) || {}; } catch {}
+  // Seed from the hardcoded roster so those names resolve instantly and are
+  // never fetched over the network.
+  try {
+    const r = (global.FTC && global.FTC.ROSTER) || {};
+    for (const k in r) if (r[k] && cache[String(k)] === undefined) cache[String(k)] = r[k];
+  } catch {}
   const inflight = {};
   const save = () => { try { localStorage.setItem(LS, JSON.stringify(cache)); } catch {} };
 

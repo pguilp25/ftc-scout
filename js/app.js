@@ -15,10 +15,18 @@
     return nm ? esc(num) + " — " + esc(nm) : esc(num);
   };
 
-  // Load records AND warm the team-name cache, so lists render with names.
+  // Load records only. Names resolve instantly from the hardcoded roster / cache;
+  // any missing ones are fetched in the BACKGROUND (see fillNames) so the UI
+  // never waits on the network.
   async function loadData() {
     await DB.load();
-    await T.ensure(DB.all().map((r) => r.team));
+  }
+
+  // Fetch any not-yet-known team names in the background, then re-render.
+  function fillNames() {
+    const missing = DB.all().map((r) => r.team).filter((t) => t && !T.nameOf(t));
+    if (!missing.length) return;
+    T.ensure(missing).then(() => render());
   }
 
   /* ---- state ---- */
@@ -165,6 +173,7 @@
     if (btn) { btn.textContent = "…"; btn.disabled = true; }
     await loadData();
     render();
+    fillNames();
     if (btn) { btn.textContent = old; btn.disabled = false; }
   }
 
@@ -389,7 +398,7 @@
       state.view = d.nav; render();
       // pull everyone's latest when opening a data view (collaborative)
       if (DB.mode() === "cloud" && d.nav !== "scout")
-        loadData().then(() => { if (state.view === d.nav) render(); });
+        loadData().then(() => { if (state.view === d.nav) { render(); fillNames(); } });
       return;
     }
     if (d.action === "refresh") { doRefresh(); return; }
@@ -511,6 +520,7 @@
 
     await loadData();
     render();
+    fillNames();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

@@ -45,6 +45,22 @@ Set `myTeam` to your team number and `eventName` to your event.
 
 ---
 
+## 2b. Team names — the event roster (`js/roster.js`)
+
+Team names are resolved automatically from the number (via ftcscout.org) and
+cached. To make them **instant and offline-proof** for your event, hardcode the
+roster in `js/roster.js` — one line per team:
+
+```js
+FTC.ROSTER = {
+  "17070": "EVOLUTION",
+  "14584": "Pioneer 327",
+};
+```
+
+Any number not listed still works (it falls back to a one-time lookup), so this
+list is purely a speed boost. Paste your event's team list here before competition.
+
 ## 3. Share data across scouts (Supabase — free)
 
 1. Create a free project at **https://supabase.com**.
