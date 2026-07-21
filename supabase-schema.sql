@@ -19,6 +19,11 @@ create table if not exists public.scouting (
 -- down, turn on Supabase Auth and tighten these policies later.
 alter table public.scouting enable row level security;
 
+-- Drop-then-create so this whole script is safe to run again without errors.
+drop policy if exists "anon can read"   on public.scouting;
+drop policy if exists "anon can insert" on public.scouting;
+drop policy if exists "anon can delete" on public.scouting;
+
 create policy "anon can read"   on public.scouting for select using (true);
 create policy "anon can insert" on public.scouting for insert with check (true);
 create policy "anon can delete" on public.scouting for delete using (true);

@@ -146,6 +146,15 @@
 
   function toast(msg) { const t = $("#toast"); if (t) t.textContent = msg; }
 
+  async function doRefresh() {
+    const btn = $("#refreshBtn");
+    const old = btn ? btn.textContent : "";
+    if (btn) { btn.textContent = "…"; btn.disabled = true; }
+    await DB.load();
+    render();
+    if (btn) { btn.textContent = old; btn.disabled = false; }
+  }
+
   /* ---------------------------- RANKING ---------------------------------- */
   function viewRanking() {
     const ranked = S.rankTeams(C, DB.all(), state.weights);
@@ -361,7 +370,14 @@
     if (!t) return;
     const d = t.dataset;
 
-    if (d.nav) { state.view = d.nav; render(); return; }
+    if (d.nav) {
+      state.view = d.nav; render();
+      // pull everyone's latest when opening a data view (collaborative)
+      if (DB.mode() === "cloud" && d.nav !== "scout")
+        DB.load().then(() => { if (state.view === d.nav) render(); });
+      return;
+    }
+    if (d.action === "refresh") { doRefresh(); return; }
     if (d.action === "save") { saveMatch(); return; }
     if (d.action === "back") { state.view = "teams"; render(); return; }
     if (d.action === "reset-weights") {

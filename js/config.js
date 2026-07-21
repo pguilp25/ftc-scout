@@ -88,8 +88,8 @@ FTC.CONFIG = {
    * When you're ready for multiple scouts to share data across phones/laptops,
    * see README.md, create a free Supabase project, and paste the two values.
    * ------------------------------------------------------------------------ */
-  supabaseUrl: "",       // e.g. "https://abcdefgh.supabase.co"
-  supabaseAnonKey: "",   // the "anon public" key from Supabase → Settings → API
+  supabaseUrl: "https://fqpqqyusimqqbhzkilws.supabase.co",
+  supabaseAnonKey: "sb_publishable_qs7ASdZ7qn1IiZSXldkysw_BjxolH0Z", // publishable key — safe to be public
 };
 
 /* Phase display order + labels for grouping the form and charts. */
