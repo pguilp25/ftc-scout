@@ -48,26 +48,29 @@ FTC.CONFIG = {
     // ---- AUTONOMOUS ----
     { id: "auto_leave",       label: "Left the launch line (LEAVE)", phase: "auto",
       type: "bool",   points: 3,  weight: 1 },
-    // Artifacts split by where they land: CLASSIFIED (into the ramp) = 3 pts,
-    // OVERFLOW (didn't classify) = 1 pt.
-    { id: "auto_classified",  label: "Classified scored (auto)", phase: "auto",
-      type: "number", points: 3,  norm: 6,  weight: 3 },
-    { id: "auto_overflow",    label: "Overflow scored (auto)", phase: "auto",
-      type: "number", points: 1,  norm: 6,  weight: 1 },
     // How many balls matched the motif (1–9). Each matching ball = 2 pts.
     { id: "auto_motif",       label: "Motif balls matched (auto)", phase: "auto",
       type: "select", style: "buttons", weight: 2, options: motifOptions(9) },
+    // Scored balls split by distance (close/far) AND classified/overflow.
+    // Order matters for the form layout: both CLASSIFIED land on the top row,
+    // both OVERFLOW on the row below. Classified = 3 pts, overflow = 1 pt.
+    { id: "auto_close_classified", label: "Close — classified", phase: "auto",
+      type: "number", points: 3, norm: 4, weight: 3 },
+    { id: "auto_far_classified",   label: "Far — classified", phase: "auto",
+      type: "number", points: 3, norm: 3, weight: 3 },
+    { id: "auto_close_overflow",   label: "Close — overflow", phase: "auto",
+      type: "number", points: 1, norm: 4, weight: 1 },
+    { id: "auto_far_overflow",     label: "Far — overflow", phase: "auto",
+      type: "number", points: 1, norm: 3, weight: 1 },
 
     // ---- TELE-OP ----
-    // Scored balls split BOTH ways: distance (close/far) AND classified vs overflow.
-    // Classified = 3 pts, Overflow = 1 pt. Keeping "close" lets you spot robots that
-    // can score up close (useful when picking an alliance partner).
+    // Same layout: both CLASSIFIED on top, both OVERFLOW below.
     { id: "tele_close_classified", label: "Close — classified", phase: "teleop",
       type: "number", points: 3, norm: 12, weight: 2 },
-    { id: "tele_close_overflow",   label: "Close — overflow", phase: "teleop",
-      type: "number", points: 1, norm: 12, weight: 1 },
     { id: "tele_far_classified",   label: "Far — classified", phase: "teleop",
       type: "number", points: 3, norm: 8,  weight: 3 },
+    { id: "tele_close_overflow",   label: "Close — overflow", phase: "teleop",
+      type: "number", points: 1, norm: 12, weight: 1 },
     { id: "tele_far_overflow",     label: "Far — overflow", phase: "teleop",
       type: "number", points: 1, norm: 8,  weight: 1 },
     { id: "cycle_speed",           label: "Cycle speed", phase: "teleop",
