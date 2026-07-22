@@ -208,7 +208,72 @@
       <div class="table-scroll"><table><thead><tr>
         <th>#</th><th>Team</th><th>Fit for us</th><th class="num">Avg pts</th><th class="num">Matches</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>Save / load these settings</h2>
+      <p class="muted">Share your "best for us" weights with teammates or copy them to another
+        device. This only moves the slider weights — not your match data.</p>
+      <div class="row">
+        <button class="btn primary" data-action="copy-weights">Copy settings code</button>
+        <button class="btn" data-action="download-weights">Download file</button>
+        <button class="btn" data-action="import-file-weights">Load from file</button>
+        <input type="file" id="weightsfile" accept="application/json" style="display:none">
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label>Paste a settings code (or a file's contents) to load it</label>
+        <textarea id="cfgIn" placeholder="paste code here…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" data-action="apply-weights">Apply pasted settings</button>
+        <span id="weightsMsg" class="muted"></span>
+      </div>
     </div>`;
+  }
+
+  /* ---- save / load the "best for us" weights ---- */
+  const weightsPayload = () => ({ app: "ftc-scout", type: "best-for-us", myTeam: C.myTeam, weights: state.weights });
+  const encodeWeights = () => btoa(unescape(encodeURIComponent(JSON.stringify(weightsPayload()))));
+  const setWeightsMsg = (t) => { const m = $("#weightsMsg"); if (m) m.textContent = t; };
+
+  function copyWeightsCode() {
+    const code = encodeWeights();
+    const fallback = () => { const i = $("#cfgIn"); if (i) { i.value = code; i.focus(); i.select(); } setWeightsMsg("Copy the code shown in the box above."); };
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(code).then(() => setWeightsMsg("Copied! Send this code to your team.")).catch(fallback);
+    else fallback();
+  }
+  function downloadWeights() {
+    const blob = new Blob([JSON.stringify(weightsPayload(), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ftc-best-for-us-" + C.myTeam + ".json";
+    a.click(); URL.revokeObjectURL(a.href);
+    setWeightsMsg("Downloaded settings file.");
+  }
+  // Accepts a weights object; applies only known metrics, clamped 0..5. Returns count.
+  function applyWeightsObject(obj) {
+    const w = obj && obj.weights;
+    if (!w || typeof w !== "object") throw new Error("no weights");
+    let n = 0;
+    C.metrics.forEach((m) => {
+      if (m.type === "text") return;
+      if (w[m.id] != null) { state.weights[m.id] = Math.max(0, Math.min(5, +w[m.id] || 0)); n++; }
+    });
+    if (!n) throw new Error("no matching settings");
+    saveWeights();
+    return n;
+  }
+  function applyWeightsText(raw) {
+    let obj;
+    try { obj = JSON.parse(raw); }                                   // raw JSON (a file's contents)
+    catch { obj = JSON.parse(decodeURIComponent(escape(atob(raw)))); } // or a base64 code
+    return applyWeightsObject(obj);
+  }
+  function applyWeightsFromInput() {
+    const raw = (($("#cfgIn") || {}).value || "").trim();
+    if (!raw) { setWeightsMsg("Paste a code first."); return; }
+    try { const n = applyWeightsText(raw); render(); setWeightsMsg(`Loaded ${n} settings.`); }
+    catch (e) { setWeightsMsg("That code didn't work — make sure you copied all of it."); }
   }
 
   function fitBar(fit) {
@@ -408,6 +473,10 @@
       C.metrics.forEach((m) => { if (m.type !== "text") state.weights[m.id] = m.weight || 0; });
       saveWeights(); render(); return;
     }
+    if (d.action === "copy-weights") { copyWeightsCode(); return; }
+    if (d.action === "download-weights") { downloadWeights(); return; }
+    if (d.action === "import-file-weights") { $("#weightsfile").click(); return; }
+    if (d.action === "apply-weights") { applyWeightsFromInput(); return; }
     if (d.action === "theme") { toggleTheme(); return; }
     if (d.action === "export") { doExport(); return; }
     if (d.action === "import") { $("#importfile").click(); return; }
@@ -482,6 +551,15 @@
 
   function onChange(e) {
     if (e.target.id === "leaderStat") { state.leaderStat = e.target.value; render(); return; }
+    if (e.target.id === "weightsfile" && e.target.files[0]) {
+      const rd = new FileReader();
+      rd.onload = () => {
+        try { const n = applyWeightsText(rd.result); render(); setWeightsMsg(`Loaded ${n} settings.`); }
+        catch (err) { setWeightsMsg("Couldn't read that settings file."); }
+      };
+      rd.readAsText(e.target.files[0]);
+      return;
+    }
     if (e.target.id === "importfile" && e.target.files[0]) {
       const rd = new FileReader();
       rd.onload = () => DB.importJSON(rd.result).then((n) => { alert("Imported. Total records: " + n); render(); })
