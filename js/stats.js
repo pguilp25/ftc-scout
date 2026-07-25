@@ -55,11 +55,25 @@
 
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
-  /* Aggregate every record for one team. */
-  function aggregateTeam(config, team, records) {
-    const rows = records
+  /* Aggregate every record for one team.
+   * opts.outlierSD (>0): drop matches whose total score is more than that many
+   * standard deviations from the team's mean (needs >= 3 matches to apply). */
+  function aggregateTeam(config, team, records, opts) {
+    let rows = records
       .filter((r) => r.team === team)
       .sort((a, b) => (a.match || 0) - (b.match || 0));
+
+    let excluded = 0;
+    const sd = opts && opts.outlierSD;
+    if (sd && rows.length >= 3) {
+      const s0 = rows.map((r) => matchScore(config, r));
+      const m = avg(s0), spread = stdev(s0);
+      if (spread > 0) {
+        const kept = rows.filter((r) => Math.abs(matchScore(config, r) - m) <= sd * spread);
+        excluded = rows.length - kept.length;
+        rows = kept;
+      }
+    }
 
     const scores = rows.map((r) => matchScore(config, r));
 
@@ -91,6 +105,7 @@
       maxScore: scores.length ? Math.max(...scores) : 0,
       minScore: scores.length ? Math.min(...scores) : 0,
       consistency: scores.length > 1 ? stdev(scores) : 0,
+      excluded,
       perMetric,
     };
   }
@@ -101,9 +116,9 @@
   }
 
   /* List of every distinct team seen, aggregated. */
-  function allTeams(config, records) {
+  function allTeams(config, records, opts) {
     const teams = [...new Set(records.map((r) => r.team))].filter(Boolean);
-    return teams.map((t) => aggregateTeam(config, t, records));
+    return teams.map((t) => aggregateTeam(config, t, records, opts));
   }
 
   /* Weighted "fit for our robot" score, 0..100, using live weights.
@@ -125,8 +140,8 @@
   }
 
   /* Rank all teams by fit score, best first. */
-  function rankTeams(config, records, weights) {
-    return allTeams(config, records)
+  function rankTeams(config, records, weights, opts) {
+    return allTeams(config, records, opts)
       .map((t) => ({ ...t, fit: fitScore(config, t, weights) }))
       .sort((a, b) => b.fit - a.fit);
   }

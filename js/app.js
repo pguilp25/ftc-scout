@@ -43,7 +43,8 @@
     group: localStorage.getItem("ftc_group") || DEFAULT_GROUP,   // active scouting group
     adminLevel: localStorage.getItem("ftc_admin_level") || "none", // "none" | "sec2" | "main"
     filterGroup: "all",       // results filter: "all" | a group name
-    filterScout: "all",       // results filter: "all" | a scouter name
+    filterScouts: [],         // results filter: [] = all, else selected scouter names
+    outlierSD: 0,             // 0 = keep all; else drop matches beyond N σ from a team's mean
   };
   if (!GROUPS.includes(state.group)) state.group = DEFAULT_GROUP;
 
@@ -54,19 +55,52 @@
   const rankWeights = () => state.weightsByGroup[state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup] || {};
 
   // Admin login/logout. 2626 = main (edit everything); 27402 = sec 2 weights only.
-  function adminAction() {
-    if (state.adminLevel !== "none") {
-      state.adminLevel = "none";
-      localStorage.setItem("ftc_admin_level", "none");
-      render(); return;
-    }
-    const pw = (prompt("Admin password:") || "").trim();
-    if (!pw) return;
-    if (pw === "2626") state.adminLevel = "main";
-    else if (pw === "27402") state.adminLevel = "sec2";
-    else { alert("Wrong password."); return; }
-    localStorage.setItem("ftc_admin_level", state.adminLevel);
+  function setAdminLevel(lvl) {
+    state.adminLevel = lvl;
+    localStorage.setItem("ftc_admin_level", lvl);
     render();
+  }
+  function adminAction() {
+    if (state.adminLevel !== "none") { setAdminLevel("none"); return; } // logged in → log out
+    openAdminModal();
+  }
+  function openAdminModal() {
+    closeAdminModal();
+    const ov = document.createElement("div");
+    ov.className = "overlay"; ov.id = "adminOverlay";
+    ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h3 style="margin:0 0 6px">Admin login</h3>
+      <p class="muted" style="margin:0 0 12px">Enter the admin password.</p>
+      <input type="password" id="adminPw" inputmode="numeric" placeholder="password" autocomplete="off">
+      <div id="adminErr" class="modal-err"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:14px">
+        <button class="btn" data-action="admin-cancel">Cancel</button>
+        <button class="btn primary" data-action="admin-submit">Log in</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    const inp = document.getElementById("adminPw");
+    if (inp) {
+      inp.focus();
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submitAdmin(); }
+        else if (e.key === "Escape") closeAdminModal();
+      });
+    }
+  }
+  function closeAdminModal() { const ov = document.getElementById("adminOverlay"); if (ov) ov.remove(); }
+  function submitAdmin() {
+    const inp = document.getElementById("adminPw");
+    const pw = ((inp && inp.value) || "").trim();
+    const lvl = pw === "2626" ? "main" : pw === "27402" ? "sec2" : null;
+    if (!lvl) {
+      const er = document.getElementById("adminErr");
+      if (er) er.textContent = "Wrong password.";
+      if (inp) { inp.value = ""; inp.focus(); }
+      return;
+    }
+    closeAdminModal();
+    setAdminLevel(lvl);
   }
 
   // Which group a record belongs to. Untagged (existing) records → default group.
@@ -76,27 +110,45 @@
   function filteredRecords() {
     return DB.all().filter((r) => {
       if (state.filterGroup !== "all" && groupOf(r) !== state.filterGroup) return false;
-      if (state.filterScout !== "all" && (r.scout || "").trim() !== state.filterScout) return false;
+      if (state.filterScouts.length && !state.filterScouts.includes((r.scout || "").trim())) return false;
       return true;
     });
   }
 
-  // The group + scouter filter bar shown atop the results views.
+  // Outlier-exclusion options passed into the stats functions.
+  const oOpts = () => ({ outlierSD: state.outlierSD });
+
+  // Preset outlier levels (± standard deviations from a team's average).
+  const OUTLIER_LEVELS = [
+    { v: 0,   label: "Keep all matches" },
+    { v: 2,   label: "Drop way-off (±2σ)" },
+    { v: 1.5, label: "Drop unusual (±1.5σ)" },
+    { v: 1,   label: "Strict (±1σ)" },
+  ];
+
+  // The group + scouter + outlier filter bar shown atop the results views.
   function filterBarHTML() {
     const scouts = [...new Set(DB.all().map((r) => (r.scout || "").trim()).filter(Boolean))].sort();
-    const opt = (v, label, cur) => `<option value="${esc(v)}"${cur === v ? " selected" : ""}>${esc(label)}</option>`;
-    return `<div class="card"><div class="row">
-      <label class="muted">Group&nbsp;
-        <select data-filter="group">
-          ${opt("all", "Both groups", state.filterGroup)}
-          ${GROUPS.map((g) => opt(g, g, state.filterGroup)).join("")}
-        </select></label>
-      <label class="muted">Scouter&nbsp;
-        <select data-filter="scout">
-          ${opt("all", "All scouters", state.filterScout)}
-          ${scouts.map((s) => opt(s, s, state.filterScout)).join("")}
-        </select></label>
-    </div></div>`;
+    const gopt = (v, label) => `<option value="${esc(v)}"${state.filterGroup === v ? " selected" : ""}>${esc(label)}</option>`;
+    const oopt = (o) => `<option value="${o.v}"${state.outlierSD === o.v ? " selected" : ""}>${esc(o.label)}</option>`;
+    const chips = scouts.length ? `
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px">
+        <span class="muted">Scouters:</span>
+        <button class="chip ${state.filterScouts.length === 0 ? "on" : ""}" data-scout="__all">All</button>
+        ${scouts.map((s) => `<button class="chip ${state.filterScouts.includes(s) ? "on" : ""}" data-scout="${esc(s)}">${esc(s)}</button>`).join("")}
+      </div>` : "";
+    return `<div class="card">
+      <div class="row">
+        <label class="muted">Group&nbsp;
+          <select data-filter="group">
+            ${gopt("all", "Both groups")}
+            ${GROUPS.map((g) => gopt(g, g)).join("")}
+          </select></label>
+        <label class="muted">Outliers&nbsp;
+          <select data-filter="outlier">${OUTLIER_LEVELS.map(oopt).join("")}</select></label>
+      </div>
+      ${chips}
+    </div>`;
   }
 
   function defaultWeights() {
@@ -284,7 +336,7 @@
   /* ---------------------------- RANKING ---------------------------------- */
   function viewRanking() {
     const rankGroup = state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup;
-    const ranked = S.rankTeams(C, filteredRecords(), state.weightsByGroup[rankGroup]);
+    const ranked = S.rankTeams(C, filteredRecords(), state.weightsByGroup[rankGroup], oOpts());
 
     const rows = ranked.length ? ranked.map((t, i) => `
       <tr data-team="${esc(t.team)}">
@@ -304,7 +356,7 @@
         <th>#</th><th>Team</th><th>Fit for us</th><th class="num">Avg pts</th><th class="num">Matches</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
     </div>
-    ${GROUPS.map(weightPanel).join("")}
+    ${GROUPS.filter(canEditWeights).map(weightPanel).join("")}
     ${saveLoadCard()}`;
   }
 
@@ -430,7 +482,7 @@
   }
 
   function viewLeaders() {
-    const teams = S.allTeams(C, filteredRecords());
+    const teams = S.allTeams(C, filteredRecords(), oOpts());
     const opts = statOptions();
     const cur = opts.find((o) => o.key === state.leaderStat) || opts[0];
     const ranked = teams
@@ -473,7 +525,7 @@
 
   /* ---------------------------- TEAMS LIST ------------------------------- */
   function viewTeams() {
-    let teams = S.allTeams(C, filteredRecords());
+    let teams = S.allTeams(C, filteredRecords(), oOpts());
     if (state.search) {
       const q = state.search.toLowerCase();
       teams = teams.filter((t) => t.team.toLowerCase().includes(q));
@@ -527,7 +579,7 @@
 
   /* ---------------------------- TEAM DETAIL ------------------------------ */
   function viewTeam(team) {
-    const agg = S.aggregateTeam(C, team, filteredRecords());
+    const agg = S.aggregateTeam(C, team, filteredRecords(), oOpts());
     if (!agg.matches) return `<div class="card empty-state">No data for ${esc(team)}.</div>`;
 
     // trend
@@ -570,6 +622,7 @@
         <div class="kpi"><div class="n">±${round(agg.consistency)}</div><div class="l">Consistency (σ)</div></div>
         <div class="kpi"><div class="n">${Math.round(fit)}</div><div class="l">Fit for us</div></div>
       </div>
+      ${agg.excluded ? `<p class="muted" style="margin:10px 0 0">${agg.excluded} match(es) excluded as outliers (${state.outlierSD}σ). These stats use the remaining ${agg.matches}.</p>` : ""}
     </div>
     <div class="card"><h2>Score by match</h2>${CH.line(trend)}</div>
     <div class="card"><h2>Where the points come from</h2>${CH.bars(phaseBars, { title: "Phase breakdown" })}</div>
@@ -583,11 +636,20 @@
 
   /* ============================ EVENTS ==================================== */
   function onClick(e) {
-    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group]");
+    if (e.target.id === "adminOverlay") { closeAdminModal(); return; } // click backdrop to close
+    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group],[data-scout]");
     if (!t) return;
     const d = t.dataset;
 
     if (d.group) { state.group = d.group; localStorage.setItem("ftc_group", d.group); render(); return; }
+    if (d.scout) {
+      if (d.scout === "__all") state.filterScouts = [];
+      else {
+        const i = state.filterScouts.indexOf(d.scout);
+        if (i >= 0) state.filterScouts.splice(i, 1); else state.filterScouts.push(d.scout);
+      }
+      render(); return;
+    }
 
     if (d.nav) {
       state.view = d.nav; render();
@@ -597,6 +659,8 @@
       return;
     }
     if (d.action === "admin") { adminAction(); return; }
+    if (d.action === "admin-submit") { submitAdmin(); return; }
+    if (d.action === "admin-cancel") { closeAdminModal(); return; }
     if (d.action === "refresh") { doRefresh(); return; }
     if (d.action === "save") { saveMatch(); return; }
     if (d.action === "back") { state.view = "teams"; render(); return; }
@@ -690,7 +754,7 @@
 
   function onChange(e) {
     if (e.target.dataset.filter === "group") { state.filterGroup = e.target.value; render(); return; }
-    if (e.target.dataset.filter === "scout") { state.filterScout = e.target.value; render(); return; }
+    if (e.target.dataset.filter === "outlier") { state.outlierSD = +e.target.value || 0; render(); return; }
     if (e.target.id === "leaderStat") { state.leaderStat = e.target.value; render(); return; }
     if (e.target.id === "weightsfile" && e.target.files[0]) {
       const rd = new FileReader();
