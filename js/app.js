@@ -639,7 +639,7 @@
     const log = agg.records.slice().reverse().map((r) => {
       const note = (r.values.notes || "").trim();
       return `
-      <tr>
+      <tr class="${note ? "has-note" : ""}">
         <td>${esc(r.match || "—")}</td>
         <td class="num">${Math.round(S.matchScore(C, r))}</td>
         <td class="muted">${esc(r.scout || "")}</td>

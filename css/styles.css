@@ -163,10 +163,11 @@ tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--plane); }
 
 /* full-width match comment/notes — never truncated */
-.note-row td { border-bottom: 1px solid var(--border); }
+tr.has-note > td { border-bottom: none; }          /* no divider between a scout and its own comment */
+.note-row td { border-bottom: 1px solid var(--border); } /* divider goes BELOW the comment instead */
 .note-cell {
   white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
-  color: var(--ink2); font-size: 13px; padding: 2px 10px 10px 10px; background: var(--plane);
+  color: var(--ink2); font-size: 13px; padding: 0 10px 10px 10px;
 }
 .note-cell::before { content: "💬 "; }
 .rank-badge {
