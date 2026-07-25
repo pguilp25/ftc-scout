@@ -163,6 +163,7 @@ tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--plane); }
 
 /* full-width match comment/notes — never truncated */
+.match-group:hover td { background: var(--plane); } /* hover highlights the scout + its comment as one */
 tr.has-note > td { border-bottom: none; }          /* no divider between a scout and its own comment */
 .note-row td { border-bottom: 1px solid var(--border); } /* divider goes BELOW the comment instead */
 .note-cell {
