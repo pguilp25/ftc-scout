@@ -125,6 +125,15 @@ textarea { min-height: 60px; resize: vertical; }
 .segmented button:last-child { border-right: none; }
 .segmented button.on { background: var(--accent); color: #fff; }
 
+/* header group switch + admin toggle */
+.group-switch { align-self: center; }
+.group-switch button { padding: 5px 12px; font-size: 13px; }
+.btn.on { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* keep dropdowns (leader stat, result filters) from stretching full width */
+.row select { width: auto; min-width: 130px; }
+.row label { display: inline-flex; align-items: center; }
+
 /* ---- table ---- */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }

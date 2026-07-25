@@ -21,6 +21,12 @@ FTC.CONFIG = {
   eventName: "FTC Edmonton Premier",
   myTeam: "17070", // your team number — used to label the ranking as "for us"
 
+  /* Scouting groups (the header switch). Each saved match is tagged with the
+   * group that's active when you save it. Existing/untagged matches count as
+   * `defaultGroup`. Rename or add groups freely. */
+  groups: ["sec 2", "sec 5"],
+  defaultGroup: "sec 5",
+
   /* --------------------------------------------------------------------------
    * METRICS
    * Each metric becomes one field on the scout form and one data column.

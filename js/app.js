@@ -30,6 +30,8 @@
   }
 
   /* ---- state ---- */
+  const GROUPS = C.groups && C.groups.length ? C.groups : ["Group A"];
+  const DEFAULT_GROUP = C.defaultGroup || GROUPS[GROUPS.length - 1];
   const state = {
     view: "scout",
     team: null,
@@ -38,7 +40,42 @@
     sort: { col: "fit", dir: -1 },
     search: "",
     leaderStat: "total",
+    group: localStorage.getItem("ftc_group") || DEFAULT_GROUP,   // active scouting group
+    admin: localStorage.getItem("ftc_admin") === "1",            // show results?
+    filterGroup: "all",       // results filter: "all" | a group name
+    filterScout: "all",       // results filter: "all" | a scouter name
   };
+  if (!GROUPS.includes(state.group)) state.group = DEFAULT_GROUP;
+
+  // Which group a record belongs to. Untagged (existing) records → default group.
+  const groupOf = (r) => (r.values && r.values.__group) || DEFAULT_GROUP;
+
+  // Records feeding the results views, after the group + scouter filters.
+  function filteredRecords() {
+    return DB.all().filter((r) => {
+      if (state.filterGroup !== "all" && groupOf(r) !== state.filterGroup) return false;
+      if (state.filterScout !== "all" && (r.scout || "").trim() !== state.filterScout) return false;
+      return true;
+    });
+  }
+
+  // The group + scouter filter bar shown atop the results views.
+  function filterBarHTML() {
+    const scouts = [...new Set(DB.all().map((r) => (r.scout || "").trim()).filter(Boolean))].sort();
+    const opt = (v, label, cur) => `<option value="${esc(v)}"${cur === v ? " selected" : ""}>${esc(label)}</option>`;
+    return `<div class="card"><div class="row">
+      <label class="muted">Group&nbsp;
+        <select data-filter="group">
+          ${opt("all", "Both groups", state.filterGroup)}
+          ${GROUPS.map((g) => opt(g, g, state.filterGroup)).join("")}
+        </select></label>
+      <label class="muted">Scouter&nbsp;
+        <select data-filter="scout">
+          ${opt("all", "All scouters", state.filterScout)}
+          ${scouts.map((s) => opt(s, s, state.filterScout)).join("")}
+        </select></label>
+    </div></div>`;
+  }
 
   function loadWeights() {
     let saved = {};
@@ -53,7 +90,24 @@
   const phaseLabel = (id) => (FTC.PHASES.find((p) => p.id === id) || {}).label || id;
 
   /* ============================ RENDER ==================================== */
+  // The header: group switch, admin toggle, tab visibility, mode badge.
+  function renderHeader() {
+    const gs = $("#groupSwitch");
+    if (gs) gs.innerHTML = GROUPS.map((g) =>
+      `<button data-group="${esc(g)}" class="${state.group === g ? "on" : ""}">${esc(g)}</button>`).join("");
+    const ab = $("#adminBtn");
+    if (ab) { ab.classList.toggle("on", state.admin); ab.textContent = state.admin ? "Admin ✓" : "Admin"; }
+    // Non-scout tabs only exist in admin mode (keeps it simple for scouters).
+    document.querySelectorAll("nav button").forEach((b) => {
+      if (b.dataset.nav && b.dataset.nav !== "scout") b.style.display = state.admin ? "" : "none";
+    });
+    const mb = $("#modeBadge");
+    if (mb) mb.textContent = DB.mode() === "cloud" ? "☁ shared" : "◐ this device";
+  }
+
   function render() {
+    if (!state.admin && state.view !== "scout") state.view = "scout"; // scouters only scout
+    renderHeader();
     setActiveTab();
     const main = $("#main");
     if (state.view === "scout")   main.innerHTML = viewScout();
@@ -82,7 +136,8 @@
 
     return `<div class="card">
       <h2>Scout a match</h2>
-      <p class="muted">Fill this in while you watch the team you're scouting, then Save. Each save is one match.</p>
+      <p class="muted">Fill this in while you watch the team you're scouting, then Save. Each save is one match.
+        Saving to group <strong>${esc(state.group)}</strong> — change it with the switch up top.</p>
       <div class="grid2">
         <div class="field"><label>Team # you're scouting</label>
           <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off">
@@ -155,6 +210,7 @@
       else if (m.type === "select") { const el = $("#s_" + m.id); values[m.id] = el ? el.value : (state.form[m.id] != null ? state.form[m.id] : null); }
       else if (m.type === "text") { const el = $("#x_" + m.id); values[m.id] = el ? el.value.trim() : ""; }
     });
+    values.__group = state.group;   // tag the record with the active scouting group
     const match = ($("#f_match").value || "").trim();
     const scout = ($("#f_scout").value || "").trim();
     const rec = await DB.add({ team, match, scout, values });
@@ -179,7 +235,7 @@
 
   /* ---------------------------- RANKING ---------------------------------- */
   function viewRanking() {
-    const ranked = S.rankTeams(C, DB.all(), state.weights);
+    const ranked = S.rankTeams(C, filteredRecords(), state.weights);
     const sliders = C.metrics.filter((m) => m.type !== "text").map((m) => `
       <div class="weight-row">
         <label for="w_${m.id}">${esc(m.label)} <span class="muted">· ${esc(phaseLabel(m.phase))}</span></label>
@@ -197,7 +253,8 @@
       </tr>`).join("") :
       `<tr><td colspan="5" class="empty-state">No teams scouted yet — go to <strong>Scout</strong> and add a match.</td></tr>`;
 
-    return `<div class="card">
+    return `${filterBarHTML()}
+    <div class="card">
       <h2>Best teams for us <span class="muted">(team ${esc(C.myTeam)})</span></h2>
       <p class="muted">Slide up what you want in an alliance partner. Value a strong auto if yours is weak;
         drop defense to 0 if you don't care. The ranking re-sorts live.</p>
@@ -304,7 +361,7 @@
   }
 
   function viewLeaders() {
-    const teams = S.allTeams(C, DB.all());
+    const teams = S.allTeams(C, filteredRecords());
     const opts = statOptions();
     const cur = opts.find((o) => o.key === state.leaderStat) || opts[0];
     const ranked = teams
@@ -329,7 +386,8 @@
       </tr>`).join("") :
       `<tr><td colspan="4" class="empty-state">No teams scouted yet — add a match under <strong>Scout</strong>.</td></tr>`;
 
-    return `<div class="card">
+    return `${filterBarHTML()}
+    <div class="card">
       <div class="row">
         <h2 style="margin:0">Leaders</h2>
         <span style="margin-left:auto">${select}</span>
@@ -346,7 +404,7 @@
 
   /* ---------------------------- TEAMS LIST ------------------------------- */
   function viewTeams() {
-    let teams = S.allTeams(C, DB.all());
+    let teams = S.allTeams(C, filteredRecords());
     if (state.search) {
       const q = state.search.toLowerCase();
       teams = teams.filter((t) => t.team.toLowerCase().includes(q));
@@ -371,7 +429,8 @@
       </tr>`).join("") :
       `<tr><td colspan="5" class="empty-state">No teams match.</td></tr>`;
 
-    return `<div class="card">
+    return `${filterBarHTML()}
+    <div class="card">
       <div class="row">
         <h2 style="margin:0">All teams</h2>
         <input id="f_search" placeholder="filter team #" style="max-width:180px;margin-left:auto" value="${esc(state.search)}">
@@ -399,7 +458,7 @@
 
   /* ---------------------------- TEAM DETAIL ------------------------------ */
   function viewTeam(team) {
-    const agg = S.aggregateTeam(C, team, DB.all());
+    const agg = S.aggregateTeam(C, team, filteredRecords());
     if (!agg.matches) return `<div class="card empty-state">No data for ${esc(team)}.</div>`;
 
     // trend
@@ -455,9 +514,11 @@
 
   /* ============================ EVENTS ==================================== */
   function onClick(e) {
-    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del]");
+    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group]");
     if (!t) return;
     const d = t.dataset;
+
+    if (d.group) { state.group = d.group; localStorage.setItem("ftc_group", d.group); render(); return; }
 
     if (d.nav) {
       state.view = d.nav; render();
@@ -465,6 +526,12 @@
       if (DB.mode() === "cloud" && d.nav !== "scout")
         loadData().then(() => { if (state.view === d.nav) { render(); fillNames(); } });
       return;
+    }
+    if (d.action === "admin") {
+      state.admin = !state.admin;
+      localStorage.setItem("ftc_admin", state.admin ? "1" : "0");
+      if (!state.admin) state.view = "scout";
+      render(); return;
     }
     if (d.action === "refresh") { doRefresh(); return; }
     if (d.action === "save") { saveMatch(); return; }
@@ -550,6 +617,8 @@
   }
 
   function onChange(e) {
+    if (e.target.dataset.filter === "group") { state.filterGroup = e.target.value; render(); return; }
+    if (e.target.dataset.filter === "scout") { state.filterScout = e.target.value; render(); return; }
     if (e.target.id === "leaderStat") { state.leaderStat = e.target.value; render(); return; }
     if (e.target.id === "weightsfile" && e.target.files[0]) {
       const rd = new FileReader();
