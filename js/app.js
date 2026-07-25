@@ -36,16 +36,38 @@
     view: "scout",
     team: null,
     form: {},                 // in-progress scout values
-    weights: loadWeights(),
+    weightsByGroup: initWeights(),   // { "sec 2": {id:w}, "sec 5": {id:w} }
     sort: { col: "fit", dir: -1 },
     search: "",
     leaderStat: "total",
     group: localStorage.getItem("ftc_group") || DEFAULT_GROUP,   // active scouting group
-    admin: localStorage.getItem("ftc_admin") === "1",            // show results?
+    adminLevel: localStorage.getItem("ftc_admin_level") || "none", // "none" | "sec2" | "main"
     filterGroup: "all",       // results filter: "all" | a group name
     filterScout: "all",       // results filter: "all" | a scouter name
   };
   if (!GROUPS.includes(state.group)) state.group = DEFAULT_GROUP;
+
+  /* ---- permissions ---- */
+  const isMain = () => state.adminLevel === "main";
+  const canEditWeights = (g) => state.adminLevel === "main" || (state.adminLevel === "sec2" && g === "sec 2");
+  // Weights the results/ranking use: the filtered group's set (default group for "both").
+  const rankWeights = () => state.weightsByGroup[state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup] || {};
+
+  // Admin login/logout. 2626 = main (edit everything); 27402 = sec 2 weights only.
+  function adminAction() {
+    if (state.adminLevel !== "none") {
+      state.adminLevel = "none";
+      localStorage.setItem("ftc_admin_level", "none");
+      render(); return;
+    }
+    const pw = (prompt("Admin password:") || "").trim();
+    if (!pw) return;
+    if (pw === "2626") state.adminLevel = "main";
+    else if (pw === "27402") state.adminLevel = "sec2";
+    else { alert("Wrong password."); return; }
+    localStorage.setItem("ftc_admin_level", state.adminLevel);
+    render();
+  }
 
   // Which group a record belongs to. Untagged (existing) records → default group.
   const groupOf = (r) => (r.values && r.values.__group) || DEFAULT_GROUP;
@@ -77,14 +99,39 @@
     </div></div>`;
   }
 
-  function loadWeights() {
-    let saved = {};
-    try { saved = JSON.parse(localStorage.getItem("ftc_weights_v1")) || {}; } catch {}
+  const defaultWeights = () => {
     const w = {};
-    C.metrics.forEach((m) => { if (m.type !== "text") w[m.id] = saved[m.id] != null ? saved[m.id] : (m.weight || 0); });
+    C.metrics.forEach((m) => { if (m.type !== "text") w[m.id] = m.weight || 0; });
     return w;
+  };
+  // One weight set per group, seeded from localStorage (DB overlays later on boot).
+  function initWeights() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem("ftc_weights_by_group")) || {}; } catch {}
+    const out = {};
+    GROUPS.forEach((g) => {
+      out[g] = defaultWeights();
+      if (saved[g]) C.metrics.forEach((m) => { if (m.type !== "text" && saved[g][m.id] != null) out[g][m.id] = saved[g][m.id]; });
+    });
+    return out;
   }
-  function saveWeights() { localStorage.setItem("ftc_weights_v1", JSON.stringify(state.weights)); }
+  // Persist locally now, and to the shared DB (debounced) so all devices sync.
+  function persistWeights() {
+    localStorage.setItem("ftc_weights_by_group", JSON.stringify(state.weightsByGroup));
+    clearTimeout(persistWeights._t);
+    persistWeights._t = setTimeout(() => { if (DB.saveSetting) DB.saveSetting("weightsByGroup", state.weightsByGroup); }, 600);
+  }
+  // Pull shared weights from the DB and overlay onto local state.
+  async function loadSettings() {
+    if (!DB.loadSettings) return;
+    let s = {}; try { s = await DB.loadSettings(); } catch { return; }
+    const wbg = s && s.weightsByGroup;
+    if (!wbg) return;
+    GROUPS.forEach((g) => {
+      if (!wbg[g]) return;
+      C.metrics.forEach((m) => { if (m.type !== "text" && wbg[g][m.id] != null) state.weightsByGroup[g][m.id] = wbg[g][m.id]; });
+    });
+  }
 
   const metric = (id) => C.metrics.find((m) => m.id === id);
   const phaseLabel = (id) => (FTC.PHASES.find((p) => p.id === id) || {}).label || id;
@@ -96,17 +143,17 @@
     if (gs) gs.innerHTML = GROUPS.map((g) =>
       `<button data-group="${esc(g)}" class="${state.group === g ? "on" : ""}">${esc(g)}</button>`).join("");
     const ab = $("#adminBtn");
-    if (ab) { ab.classList.toggle("on", state.admin); ab.textContent = state.admin ? "Admin ✓" : "Admin"; }
-    // Non-scout tabs only exist in admin mode (keeps it simple for scouters).
-    document.querySelectorAll("nav button").forEach((b) => {
-      if (b.dataset.nav && b.dataset.nav !== "scout") b.style.display = state.admin ? "" : "none";
-    });
+    if (ab) {
+      ab.classList.toggle("on", state.adminLevel !== "none");
+      ab.textContent = state.adminLevel === "main" ? "Admin ✓"
+                     : state.adminLevel === "sec2" ? "Sec 2 admin ✓" : "Admin";
+      ab.title = state.adminLevel === "none" ? "Log in to edit" : "Logged in — click to log out";
+    }
     const mb = $("#modeBadge");
     if (mb) mb.textContent = DB.mode() === "cloud" ? "☁ shared" : "◐ this device";
   }
 
   function render() {
-    if (!state.admin && state.view !== "scout") state.view = "scout"; // scouters only scout
     renderHeader();
     setActiveTab();
     const main = $("#main");
@@ -228,6 +275,7 @@
     const old = btn ? btn.textContent : "";
     if (btn) { btn.textContent = "…"; btn.disabled = true; }
     await loadData();
+    await loadSettings();
     render();
     fillNames();
     if (btn) { btn.textContent = old; btn.disabled = false; }
@@ -235,13 +283,8 @@
 
   /* ---------------------------- RANKING ---------------------------------- */
   function viewRanking() {
-    const ranked = S.rankTeams(C, filteredRecords(), state.weights);
-    const sliders = C.metrics.filter((m) => m.type !== "text").map((m) => `
-      <div class="weight-row">
-        <label for="w_${m.id}">${esc(m.label)} <span class="muted">· ${esc(phaseLabel(m.phase))}</span></label>
-        <input type="range" id="w_${m.id}" min="0" max="5" step="1" value="${state.weights[m.id]}" data-weight="${m.id}">
-        <span class="wv" id="wv_${m.id}">${state.weights[m.id]}</span>
-      </div>`).join("");
+    const rankGroup = state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup;
+    const ranked = S.rankTeams(C, filteredRecords(), state.weightsByGroup[rankGroup]);
 
     const rows = ranked.length ? ranked.map((t, i) => `
       <tr data-team="${esc(t.team)}">
@@ -256,39 +299,61 @@
     return `${filterBarHTML()}
     <div class="card">
       <h2>Best teams for us <span class="muted">(team ${esc(C.myTeam)})</span></h2>
-      <p class="muted">Slide up what you want in an alliance partner. Value a strong auto if yours is weak;
-        drop defense to 0 if you don't care. The ranking re-sorts live.</p>
-      ${sliders}
-      <div class="row"><button class="btn" data-action="reset-weights">Reset to defaults</button></div>
-    </div>
-    <div class="card">
+      <p class="muted">Ranked with the <strong>${esc(rankGroup)}</strong> weights (set by the group filter above).</p>
       <div class="table-scroll"><table><thead><tr>
         <th>#</th><th>Team</th><th>Fit for us</th><th class="num">Avg pts</th><th class="num">Matches</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
     </div>
-    <div class="card">
-      <h2>Save / load these settings</h2>
-      <p class="muted">Share your "best for us" weights with teammates or copy them to another
-        device. This only moves the slider weights — not your match data.</p>
+    ${GROUPS.map(weightPanel).join("")}
+    ${saveLoadCard()}`;
+  }
+
+  // One editable (or read-only) slider panel per group.
+  function weightPanel(g) {
+    const editable = canEditWeights(g);
+    const sliders = C.metrics.filter((m) => m.type !== "text").map((m) => `
+      <div class="weight-row">
+        <label>${esc(m.label)} <span class="muted">· ${esc(phaseLabel(m.phase))}</span></label>
+        <input type="range" min="0" max="5" step="1" value="${state.weightsByGroup[g][m.id]}"
+               data-weight="${m.id}" data-wgroup="${esc(g)}"${editable ? "" : " disabled"}>
+        <span class="wv">${state.weightsByGroup[g][m.id]}</span>
+      </div>`).join("");
+    return `<div class="card">
+      <h2>${esc(g)} — best-for-us weights ${editable ? "" : '<span class="pill">read-only</span>'}</h2>
+      <p class="muted">${editable
+        ? "Drag to tune what you want in an alliance partner. Saved to the shared database for everyone."
+        : "Only an admin for this section can change these."}</p>
+      ${sliders}
+      ${editable ? `<div class="row"><button class="btn" data-action="reset-weights" data-wgroup="${esc(g)}">Reset ${esc(g)} to defaults</button></div>` : ""}
+    </div>`;
+  }
+
+  // Backup / transfer the weights as a code or file (import needs edit rights).
+  function saveLoadCard() {
+    const canImport = state.adminLevel !== "none";
+    return `<div class="card">
+      <h2>Back up / transfer these settings</h2>
+      <p class="muted">Weights already sync through the database. This is for backups or moving them
+        to a different event. Only the sections you can edit are affected on import.</p>
       <div class="row">
-        <button class="btn primary" data-action="copy-weights">Copy settings code</button>
+        <button class="btn" data-action="copy-weights">Copy settings code</button>
         <button class="btn" data-action="download-weights">Download file</button>
-        <button class="btn" data-action="import-file-weights">Load from file</button>
-        <input type="file" id="weightsfile" accept="application/json" style="display:none">
+        ${canImport ? `<button class="btn" data-action="import-file-weights">Load from file</button>
+        <input type="file" id="weightsfile" accept="application/json" style="display:none">` : ""}
       </div>
-      <div class="field" style="margin-top:12px">
+      ${canImport ? `<div class="field" style="margin-top:12px">
         <label>Paste a settings code (or a file's contents) to load it</label>
         <textarea id="cfgIn" placeholder="paste code here…"></textarea>
       </div>
       <div class="row">
         <button class="btn primary" data-action="apply-weights">Apply pasted settings</button>
         <span id="weightsMsg" class="muted"></span>
-      </div>
+      </div>` : `<div id="weightsMsg" class="muted" style="margin-top:8px">Log in as admin to import settings.</div>`}
     </div>`;
   }
 
-  /* ---- save / load the "best for us" weights ---- */
-  const weightsPayload = () => ({ app: "ftc-scout", type: "best-for-us", myTeam: C.myTeam, weights: state.weights });
+  /* ---- save / load the "best for us" weights (both groups) ---- */
+  const weightsPayload = () => ({ app: "ftc-scout", type: "best-for-us", myTeam: C.myTeam, weightsByGroup: state.weightsByGroup });
   const encodeWeights = () => btoa(unescape(encodeURIComponent(JSON.stringify(weightsPayload()))));
   const setWeightsMsg = (t) => { const m = $("#weightsMsg"); if (m) m.textContent = t; };
 
@@ -307,17 +372,21 @@
     a.click(); URL.revokeObjectURL(a.href);
     setWeightsMsg("Downloaded settings file.");
   }
-  // Accepts a weights object; applies only known metrics, clamped 0..5. Returns count.
+  // Applies weights for the groups the current admin may edit, clamped 0..5.
   function applyWeightsObject(obj) {
-    const w = obj && obj.weights;
-    if (!w || typeof w !== "object") throw new Error("no weights");
+    // accept new {weightsByGroup} or legacy {weights} (→ default group)
+    const wbg = obj && (obj.weightsByGroup || (obj.weights ? { [DEFAULT_GROUP]: obj.weights } : null));
+    if (!wbg || typeof wbg !== "object") throw new Error("no weights");
     let n = 0;
-    C.metrics.forEach((m) => {
-      if (m.type === "text") return;
-      if (w[m.id] != null) { state.weights[m.id] = Math.max(0, Math.min(5, +w[m.id] || 0)); n++; }
+    GROUPS.forEach((g) => {
+      if (!wbg[g] || !canEditWeights(g)) return;
+      C.metrics.forEach((m) => {
+        if (m.type === "text") return;
+        if (wbg[g][m.id] != null) { state.weightsByGroup[g][m.id] = Math.max(0, Math.min(5, +wbg[g][m.id] || 0)); n++; }
+      });
     });
-    if (!n) throw new Error("no matching settings");
-    saveWeights();
+    if (!n) throw new Error("no editable settings in that code");
+    persistWeights();
     return n;
   }
   function applyWeightsText(raw) {
@@ -411,7 +480,7 @@
     }
     const col = state.sort.col, dir = state.sort.dir;
     const keyOf = (t) => col === "team" ? t.team : col === "matches" ? t.matches
-      : col === "fit" ? S.fitScore(C, t, state.weights) : t.avgScore;
+      : col === "fit" ? S.fitScore(C, t, rankWeights()) : t.avgScore;
     teams.sort((a, b) => {
       const ka = keyOf(a), kb = keyOf(b);
       if (typeof ka === "string") return dir * ka.localeCompare(kb);
@@ -425,7 +494,7 @@
         <td class="num">${t.matches}</td>
         <td class="num">${round(t.avgScore)}</td>
         <td class="num">${round(t.maxScore)}</td>
-        <td class="num">${round(S.fitScore(C, t, state.weights))}</td>
+        <td class="num">${round(S.fitScore(C, t, rankWeights()))}</td>
       </tr>`).join("") :
       `<tr><td colspan="5" class="empty-state">No teams match.</td></tr>`;
 
@@ -450,8 +519,8 @@
         ${DB.mode() === "local" ? " — set up Supabase (see README) to share across scouts." : ""}</p>
       <div class="row">
         <button class="btn" data-action="export">Export data (.json)</button>
-        <button class="btn" data-action="import">Import data</button>
-        <input type="file" id="importfile" accept="application/json" style="display:none">
+        ${isMain() ? `<button class="btn" data-action="import">Import data</button>
+        <input type="file" id="importfile" accept="application/json" style="display:none">` : ""}
       </div>
     </div>`;
   }
@@ -480,14 +549,14 @@
         : { label: m.label, value: Math.round(val * 100), suffix: "%", max: 100 };
     });
 
-    const fit = S.fitScore(C, agg, state.weights);
+    const fit = S.fitScore(C, agg, rankWeights());
     const log = agg.records.slice().reverse().map((r) => `
       <tr>
         <td>${esc(r.match || "—")}</td>
         <td class="num">${Math.round(S.matchScore(C, r))}</td>
         <td class="muted">${esc(r.scout || "")}</td>
         <td>${esc((r.values.notes || "").slice(0, 60))}</td>
-        <td class="num"><button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button></td>
+        <td class="num">${isMain() ? `<button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button>` : ""}</td>
       </tr>`).join("");
 
     return `<div class="card">
@@ -527,22 +596,19 @@
         loadData().then(() => { if (state.view === d.nav) { render(); fillNames(); } });
       return;
     }
-    if (d.action === "admin") {
-      state.admin = !state.admin;
-      localStorage.setItem("ftc_admin", state.admin ? "1" : "0");
-      if (!state.admin) state.view = "scout";
-      render(); return;
-    }
+    if (d.action === "admin") { adminAction(); return; }
     if (d.action === "refresh") { doRefresh(); return; }
     if (d.action === "save") { saveMatch(); return; }
     if (d.action === "back") { state.view = "teams"; render(); return; }
     if (d.action === "reset-weights") {
-      C.metrics.forEach((m) => { if (m.type !== "text") state.weights[m.id] = m.weight || 0; });
-      saveWeights(); render(); return;
+      const g = d.wgroup;
+      if (!canEditWeights(g)) return;
+      C.metrics.forEach((m) => { if (m.type !== "text") state.weightsByGroup[g][m.id] = m.weight || 0; });
+      persistWeights(); render(); return;
     }
     if (d.action === "copy-weights") { copyWeightsCode(); return; }
     if (d.action === "download-weights") { downloadWeights(); return; }
-    if (d.action === "import-file-weights") { $("#weightsfile").click(); return; }
+    if (d.action === "import-file-weights") { const el = $("#weightsfile"); if (el) el.click(); return; }
     if (d.action === "apply-weights") { applyWeightsFromInput(); return; }
     if (d.action === "theme") { toggleTheme(); return; }
     if (d.action === "export") { doExport(); return; }
@@ -576,7 +642,11 @@
         b.classList.toggle("on", b.dataset.val === state.form[id]));
       return;
     }
-    if (d.del) { if (confirm("Delete this match record?")) DB.remove(d.del).then(render); return; }
+    if (d.del) {
+      if (!isMain()) return; // only the main admin can delete
+      if (confirm("Delete this match record?")) DB.remove(d.del).then(render);
+      return;
+    }
     if (d.sort) {
       state.sort = state.sort.col === d.sort
         ? { col: d.sort, dir: -state.sort.dir } : { col: d.sort, dir: -1 };
@@ -588,11 +658,13 @@
   function onInput(e) {
     const t = e.target;
     if (t.dataset.weight) {
-      state.weights[t.dataset.weight] = +t.value;
-      const lab = $("#wv_" + t.dataset.weight); if (lab) lab.textContent = t.value;
-      saveWeights();
+      const g = t.dataset.wgroup;
+      if (!canEditWeights(g)) return;
+      state.weightsByGroup[g][t.dataset.weight] = +t.value;
+      const lab = t.parentNode.querySelector(".wv"); if (lab) lab.textContent = t.value;
+      persistWeights();
       clearTimeout(onInput._t);
-      onInput._t = setTimeout(() => { if (state.view === "ranking") render(); }, 150);
+      onInput._t = setTimeout(() => { if (state.view === "ranking") render(); }, 250);
       return;
     }
     if (t.id === "f_search") { state.search = t.value; render(); return; }
@@ -668,6 +740,7 @@
     await loadData();
     render();
     fillNames();
+    loadSettings().then(render);   // overlay shared weight sliders from the DB
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

@@ -30,3 +30,23 @@ create policy "anon can delete" on public.scouting for delete using (true);
 
 -- Optional: keep the newest data first when querying.
 create index if not exists scouting_team_idx on public.scouting (team);
+
+-- ---------------------------------------------------------------------------
+-- SETTINGS table: shared app settings (e.g. the "best for us" weight sliders),
+-- so every device sees the same tuned ranking. Key/value.
+-- ---------------------------------------------------------------------------
+create table if not exists public.settings (
+  key        text primary key,
+  value      jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
+
+alter table public.settings enable row level security;
+
+drop policy if exists "anon read settings"   on public.settings;
+drop policy if exists "anon insert settings" on public.settings;
+drop policy if exists "anon update settings" on public.settings;
+
+create policy "anon read settings"   on public.settings for select using (true);
+create policy "anon insert settings" on public.settings for insert with check (true);
+create policy "anon update settings" on public.settings for update using (true);

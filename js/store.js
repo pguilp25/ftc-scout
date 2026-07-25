@@ -92,6 +92,36 @@
       }
     },
 
+    /* ---- shared app settings (weight sliders, etc.) ---- */
+    async loadSettings() {
+      if (!useCloud()) { try { return JSON.parse(localStorage.getItem("ftc_settings")) || {}; } catch { return {}; } }
+      try {
+        const res = await fetch(sbUrl("settings?select=key,value"), { headers: sbHeaders() });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const rows = await res.json();
+        const map = {};
+        rows.forEach((r) => { map[r.key] = r.value; });
+        localStorage.setItem("ftc_settings", JSON.stringify(map));
+        return map;
+      } catch (e) {
+        console.warn("Settings load failed, using local:", e.message);
+        try { return JSON.parse(localStorage.getItem("ftc_settings")) || {}; } catch { return {}; }
+      }
+    },
+    async saveSetting(key, value) {
+      let map = {}; try { map = JSON.parse(localStorage.getItem("ftc_settings")) || {}; } catch {}
+      map[key] = value; localStorage.setItem("ftc_settings", JSON.stringify(map));
+      if (useCloud()) {
+        try {
+          await fetch(sbUrl("settings"), {
+            method: "POST",
+            headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({ key, value }),
+          });
+        } catch (e) { console.warn("Settings save failed (kept locally):", e.message); }
+      }
+    },
+
     /* Export / import for sharing a device's data as a file. */
     exportJSON() { return JSON.stringify(cache, null, 2); },
     async importJSON(text) {

@@ -8,6 +8,7 @@
 
   /* The numeric value a single metric contributes to a MATCH-POINT estimate. */
   function metricPoints(metric, value) {
+    if (metric.noPoints) return 0; // counts in the ranking, but not as game points
     switch (metric.type) {
       case "number": return isNum(value) ? value * (metric.points || 0) : 0;
       case "bool":   return value ? (metric.points || 0) : 0;

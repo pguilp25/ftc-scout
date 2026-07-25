@@ -98,15 +98,22 @@ FTC.CONFIG = {
       type: "select", style: "buttons", weight: 2, options: motifOptions(9) },
 
     // ---- QUALITATIVE (judgement calls — not part of the point estimate) ----
-    // Crashed & penalties are NEGATIVES: "Yes"/high counts AGAINST a team.
-    { id: "crashed",      label: "Broke down / crashed?", phase: "qual",
-      type: "bool", higherIsBetter: false, weight: 2 },
+    // Breakdown severity: No < Small bug < Big crash. noPoints = not game points,
+    // but it still counts in the ranking (higherIsBetter:false → "No" is best).
+    { id: "crashed",      label: "Breakdown / crash?", phase: "qual",
+      type: "select", style: "buttons", noPoints: true, higherIsBetter: false, weight: 2,
+      options: [
+        { label: "No",        score: 0 },
+        { label: "Small bug", score: 1 },
+        { label: "Big crash", score: 2 },
+      ] },
     { id: "driver_skill", label: "Driver skill", phase: "qual",
       type: "rating", max: 5, weight: 2 },
     { id: "defense",      label: "Defense played", phase: "qual",
       type: "rating", max: 5, weight: 1 },
-    { id: "penalties",    label: "Drivers cause penalties?", phase: "qual",
-      type: "rating", max: 5, higherIsBetter: false, weight: 1 },
+    // Higher = better (the driver AVOIDS penalties well).
+    { id: "penalties",    label: "How well does the driver avoid penalties?", phase: "qual",
+      type: "rating", max: 5, weight: 1 },
     { id: "notes",        label: "Notes", phase: "qual", type: "text" },
   ],
 
