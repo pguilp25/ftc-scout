@@ -59,11 +59,15 @@
       const scaleMax = d.max || vMax;
       const w = (d.value / scaleMax) * iw;
       const color = d.color || `var(--series-${(i % 8) + 1})`;
-      return `
+      const content = `
         <text x="${P.l - 8}" y="${cy + 20}" class="axis" text-anchor="end">${esc(d.label)}</text>
         <rect x="${P.l}" y="${cy + 8}" width="${Math.max(2, w)}" height="14" rx="4"
               fill="${color}"><title>${esc(d.label)}: ${round(d.value)}</title></rect>
         <text x="${P.l + Math.max(2, w) + 6}" y="${cy + 20}" class="val">${round(d.value)}${d.suffix || ""}</text>`;
+      // If the item has a `key`, wrap the whole row so tapping anywhere drills in.
+      return d.key
+        ? `<g data-barkey="${esc(d.key)}" class="bar-click"><rect x="0" y="${cy}" width="${W}" height="${rowH}" fill="transparent"/>${content}</g>`
+        : content;
     }).join("");
     return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(opts.title || "bars")}">${rows}</svg>`;
   }

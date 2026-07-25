@@ -45,6 +45,7 @@
     filterGroup: "all",       // results filter: "all" | a group name
     filterScouts: [],         // results filter: [] = all, else selected scouter names
     outlierSD: 0,             // 0 = keep all; else drop matches beyond N σ from a team's mean
+    detailPhase: null,        // team detail: which phase is drilled into ("auto"|"teleop"|"endgame")
   };
   if (!GROUPS.includes(state.group)) state.group = DEFAULT_GROUP;
 
@@ -52,7 +53,8 @@
   const isMain = () => state.adminLevel === "main";
   const canEditWeights = (g) => state.adminLevel === "main" || (state.adminLevel === "sec2" && g === "sec 2");
   // Weights the results/ranking use: the filtered group's set (default group for "both").
-  const rankWeights = () => state.weightsByGroup[state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup] || {};
+  // Ranking uses the weight set for the mode you're in (the header group switch).
+  const rankWeights = () => state.weightsByGroup[state.group] || {};
 
   // Admin login/logout. 2626 = main (edit everything); 27402 = sec 2 weights only.
   function setAdminLevel(lvl) {
@@ -335,7 +337,7 @@
 
   /* ---------------------------- RANKING ---------------------------------- */
   function viewRanking() {
-    const rankGroup = state.filterGroup === "all" ? DEFAULT_GROUP : state.filterGroup;
+    const rankGroup = state.group;   // follows the header mode (sec 2 / sec 5)
     const ranked = S.rankTeams(C, filteredRecords(), state.weightsByGroup[rankGroup], oOpts());
 
     const rows = ranked.length ? ranked.map((t, i) => `
@@ -351,7 +353,7 @@
     return `${filterBarHTML()}
     <div class="card">
       <h2>Best teams for us <span class="muted">(team ${esc(C.myTeam)})</span></h2>
-      <p class="muted">Ranked with the <strong>${esc(rankGroup)}</strong> weights (set by the group filter above).</p>
+      <p class="muted">Ranked with the <strong>${esc(rankGroup)}</strong> weights — your current mode (switch it with the ${esc(GROUPS.join(" / "))} toggle up top).</p>
       <div class="table-scroll"><table><thead><tr>
         <th>#</th><th>Team</th><th>Fit for us</th><th class="num">Avg pts</th><th class="num">Matches</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
@@ -584,12 +586,24 @@
 
     // trend
     const trend = agg.records.map((r, i) => ({ label: r.match || "M" + (i + 1), y: Math.round(S.matchScore(C, r)) }));
-    // phase breakdown (avg points per phase)
-    const phaseBars = ["auto", "teleop", "endgame"].map((p, i) => ({
+    // phase breakdown (avg points per phase) — each bar is clickable (key = phase)
+    const PHASES = ["auto", "teleop", "endgame"].filter((p) => C.metrics.some((m) => m.phase === p));
+    const phaseBars = PHASES.map((p, i) => ({
+      key: p,
       label: phaseLabel(p),
       value: S.avg(agg.records.map((r) => S.phaseScore(C, r, p))),
       color: `var(--series-${i + 1})`,
-    })).filter((b) => C.metrics.some((m) => m.phase === b0(b)));
+    }));
+
+    // drill-down: per-metric point sources within the selected phase
+    const dp = state.detailPhase && PHASES.includes(state.detailPhase) ? state.detailPhase : null;
+    const breakdown = dp ? C.metrics
+      .filter((m) => m.phase === dp && ((m.type === "number" && m.points) || (m.type === "bool" && m.points) || m.type === "select"))
+      .map((m, i) => ({
+        label: m.label,
+        value: S.avg(agg.records.map((r) => S.metricPoints(m, r.values[m.id]))),
+        color: `var(--series-${(i % 8) + 1})`,
+      })) : null;
 
     // ratings & rates profile
     // Each bar carries its own `max` so lengths are comparable: a 5/5 rating and
@@ -625,19 +639,27 @@
       ${agg.excluded ? `<p class="muted" style="margin:10px 0 0">${agg.excluded} match(es) excluded as outliers (${state.outlierSD}σ). These stats use the remaining ${agg.matches}.</p>` : ""}
     </div>
     <div class="card"><h2>Score by match</h2>${CH.line(trend)}</div>
-    <div class="card"><h2>Where the points come from</h2>${CH.bars(phaseBars, { title: "Phase breakdown" })}</div>
+    <div class="card">
+      <h2>Where the points come from</h2>
+      ${CH.bars(phaseBars, { title: "Phase breakdown" })}
+      <p class="muted">Tap a phase to break it down into exactly which actions scored those points.</p>
+    </div>
+    ${breakdown ? `<div class="card">
+      <h2>${esc(phaseLabel(dp))} — point sources</h2>
+      ${CH.bars(breakdown, { title: "Phase detail" })}
+      <p class="muted">Average points per action in ${esc(phaseLabel(dp))}. Tap another phase above to switch, or tap it again to close.</p>
+    </div>` : ""}
     ${profile.length ? `<div class="card"><h2>Ratings & rates</h2>${CH.bars(profile, { title: "Profile" })}</div>` : ""}
     <div class="card"><h2>Match log</h2>
       <table><thead><tr><th>Match</th><th class="num">Pts</th><th>Scout</th><th>Notes</th><th></th></tr></thead>
       <tbody>${log}</tbody></table>
     </div>`;
   }
-  const b0 = (b) => ({ "Autonomous": "auto", "Tele-Op": "teleop", "Endgame": "endgame" }[b.label] || b.label);
 
   /* ============================ EVENTS ==================================== */
   function onClick(e) {
     if (e.target.id === "adminOverlay") { closeAdminModal(); return; } // click backdrop to close
-    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group],[data-scout]");
+    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group],[data-scout],[data-barkey]");
     if (!t) return;
     const d = t.dataset;
 
@@ -716,7 +738,8 @@
         ? { col: d.sort, dir: -state.sort.dir } : { col: d.sort, dir: -1 };
       render(); return;
     }
-    if (d.team) { state.team = d.team; state.view = "team"; render(); return; }
+    if (d.barkey) { state.detailPhase = state.detailPhase === d.barkey ? null : d.barkey; render(); return; }
+    if (d.team) { state.detailPhase = null; state.team = d.team; state.view = "team"; render(); return; }
   }
 
   function onInput(e) {
