@@ -636,15 +636,18 @@
     });
 
     const fit = S.fitScore(C, agg, rankWeights());
-    const log = agg.records.slice().reverse().map((r) => `
+    const log = agg.records.slice().reverse().map((r) => {
+      const note = (r.values.notes || "").trim();
+      return `
       <tr>
         <td>${esc(r.match || "—")}</td>
         <td class="num">${Math.round(S.matchScore(C, r))}</td>
         <td class="muted">${esc(r.scout || "")}</td>
-        <td>${esc((r.values.notes || "").slice(0, 60))}</td>
         <td class="num">${isMain() ? `<button class="btn" data-edit="${esc(r.id)}" style="padding:4px 10px">Edit</button>
           <button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button>` : ""}</td>
-      </tr>`).join("");
+      </tr>
+      ${note ? `<tr class="note-row"><td colspan="4" class="note-cell">${esc(note)}</td></tr>` : ""}`;
+    }).join("");
 
     return `<div class="card">
       <div class="row">
@@ -673,7 +676,7 @@
     </div>` : ""}
     ${profile.length ? `<div class="card"><h2>Ratings & rates</h2>${CH.bars(profile, { title: "Profile" })}</div>` : ""}
     <div class="card"><h2>Match log</h2>
-      <table><thead><tr><th>Match</th><th class="num">Pts</th><th>Scout</th><th>Notes</th><th></th></tr></thead>
+      <table><thead><tr><th>Match</th><th class="num">Pts</th><th>Scout</th><th></th></tr></thead>
       <tbody>${log}</tbody></table>
     </div>`;
   }
