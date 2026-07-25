@@ -99,11 +99,11 @@
     </div></div>`;
   }
 
-  const defaultWeights = () => {
+  function defaultWeights() {
     const w = {};
     C.metrics.forEach((m) => { if (m.type !== "text") w[m.id] = m.weight || 0; });
     return w;
-  };
+  }
   // One weight set per group, seeded from localStorage (DB overlays later on boot).
   function initWeights() {
     let saved = {};
