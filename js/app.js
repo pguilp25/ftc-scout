@@ -46,6 +46,7 @@
     filterScouts: [],         // results filter: [] = all, else selected scouter names
     outlierSD: 0,             // 0 = keep all; else drop matches beyond N σ from a team's mean
     detailPhase: null,        // team detail: which phase is drilled into ("auto"|"teleop"|"endgame")
+    edit: null,               // when editing an existing scouting: { id, team, match, scout, group }
   };
   if (!GROUPS.includes(state.group)) state.group = DEFAULT_GROUP;
 
@@ -235,22 +236,30 @@
       return `<div class="phase-group"><h3>${esc(ph.label)}</h3><div class="grid2">${fields}</div></div>`;
     }).join("");
 
+    const ed = state.edit;
+    const banner = ed ? `<div class="row" style="margin-bottom:10px">
+      <span class="pill">✎ Editing team ${esc(ed.team)} · match ${esc(ed.match || "—")} · ${esc(ed.group)}</span>
+      <button class="btn" data-action="cancel-edit">Cancel edit</button>
+    </div>` : "";
+
     return `<div class="card">
-      <h2>Scout a match</h2>
-      <p class="muted">Fill this in while you watch the team you're scouting, then Save. Each save is one match.
-        Saving to group <strong>${esc(state.group)}</strong> — change it with the switch up top.</p>
+      ${banner}
+      <h2>${ed ? "Edit match" : "Scout a match"}</h2>
+      <p class="muted">${ed
+        ? "Change any field, then Update to save the correction."
+        : `Fill this in while you watch the team you're scouting, then Save. Each save is one match. Saving to group <strong>${esc(state.group)}</strong> — change it with the switch up top.`}</p>
       <div class="grid2">
         <div class="field"><label>Team # you're scouting</label>
-          <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off">
+          <input id="f_team" inputmode="numeric" placeholder="e.g. 14584" autocomplete="off" value="${ed ? esc(ed.team) : ""}">
           <div id="teamNameHint" class="muted" style="font-size:13px;margin-top:4px;min-height:18px"></div></div>
         <div class="field"><label>Match (optional)</label>
-          <input id="f_match" placeholder="e.g. Q12" autocomplete="off"></div>
+          <input id="f_match" placeholder="e.g. Q12" autocomplete="off" value="${ed ? esc(ed.match) : ""}"></div>
       </div>
       <div class="field"><label>Your name (scout)</label>
-        <input id="f_scout" placeholder="who's filling this in" autocomplete="off"></div>
+        <input id="f_scout" placeholder="who's filling this in" autocomplete="off" value="${ed ? esc(ed.scout) : ""}"></div>
       ${groups}
       <div class="row" style="margin-top:16px">
-        <button class="btn primary" data-action="save">Save match</button>
+        <button class="btn primary" data-action="save">${ed ? "Update match" : "Save match"}</button>
         <span id="toast" class="muted"></span>
       </div>
     </div>`;
@@ -311,15 +320,23 @@
       else if (m.type === "select") { const el = $("#s_" + m.id); values[m.id] = el ? el.value : (state.form[m.id] != null ? state.form[m.id] : null); }
       else if (m.type === "text") { const el = $("#x_" + m.id); values[m.id] = el ? el.value.trim() : ""; }
     });
-    values.__group = state.group;   // tag the record with the active scouting group
     const match = ($("#f_match").value || "").trim();
     const scout = ($("#f_scout").value || "").trim();
+
+    if (state.edit) {                          // ---- update an existing scouting ----
+      values.__group = state.edit.group;
+      await DB.update(state.edit.id, { team, match, scout, values });
+      state.edit = null; state.form = {};
+      state.team = team; state.view = "team"; render();
+      return;
+    }
+
+    values.__group = state.group;              // tag with the active scouting group
     const rec = await DB.add({ team, match, scout, values });
-    // reset numeric fields for the next match, keep scout name
-    state.form = {};
+    state.form = {};                           // reset for the next match, keep scout name
     render();
     $("#f_scout").value = scout;
-    toast(`Saved ${rec.team}${match ? " · " + match : ""}. ${DB.all().filter(r=>r.team===team).length} match(es) for this team.`);
+    toast(`Saved ${rec.team}${match ? " · " + match : ""}. ${DB.all().filter(r=>r.team===team).length} scouting(s) for this team.`);
   }
 
   function toast(msg) { const t = $("#toast"); if (t) t.textContent = msg; }
@@ -584,14 +601,17 @@
     const agg = S.aggregateTeam(C, team, filteredRecords(), oOpts());
     if (!agg.matches) return `<div class="card empty-state">No data for ${esc(team)}.</div>`;
 
-    // trend
-    const trend = agg.records.map((r, i) => ({ label: r.match || "M" + (i + 1), y: Math.round(S.matchScore(C, r)) }));
+    const CM = agg.combinedMatches;   // de-duplicated matches (dupes already averaged)
+    const phaseSum = (mm, p) => C.metrics.filter((m) => m.phase === p).reduce((s, m) => s + (mm.points[m.id] || 0), 0);
+
+    // trend — one point per real match (not per scouting)
+    const trend = CM.map((mm, i) => ({ label: mm.match || "M" + (i + 1), y: Math.round(mm.score) }));
     // phase breakdown (avg points per phase) — each bar is clickable (key = phase)
     const PHASES = ["auto", "teleop", "endgame"].filter((p) => C.metrics.some((m) => m.phase === p));
     const phaseBars = PHASES.map((p, i) => ({
       key: p,
       label: phaseLabel(p),
-      value: S.avg(agg.records.map((r) => S.phaseScore(C, r, p))),
+      value: S.avg(CM.map((mm) => phaseSum(mm, p))),
       color: `var(--series-${i + 1})`,
     }));
 
@@ -601,7 +621,7 @@
       .filter((m) => m.phase === dp && ((m.type === "number" && m.points) || (m.type === "bool" && m.points) || m.type === "select"))
       .map((m, i) => ({
         label: m.label,
-        value: S.avg(agg.records.map((r) => S.metricPoints(m, r.values[m.id]))),
+        value: S.avg(CM.map((mm) => mm.points[m.id] || 0)),
         color: `var(--series-${(i % 8) + 1})`,
       })) : null;
 
@@ -622,7 +642,8 @@
         <td class="num">${Math.round(S.matchScore(C, r))}</td>
         <td class="muted">${esc(r.scout || "")}</td>
         <td>${esc((r.values.notes || "").slice(0, 60))}</td>
-        <td class="num">${isMain() ? `<button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button>` : ""}</td>
+        <td class="num">${isMain() ? `<button class="btn" data-edit="${esc(r.id)}" style="padding:4px 10px">Edit</button>
+          <button class="btn danger" data-del="${esc(r.id)}" style="padding:4px 10px">Delete</button>` : ""}</td>
       </tr>`).join("");
 
     return `<div class="card">
@@ -636,6 +657,7 @@
         <div class="kpi"><div class="n">±${round(agg.consistency)}</div><div class="l">Consistency (σ)</div></div>
         <div class="kpi"><div class="n">${Math.round(fit)}</div><div class="l">Fit for us</div></div>
       </div>
+      ${agg.scoutings > agg.matches ? `<p class="muted" style="margin:10px 0 0">${agg.scoutings} scoutings across ${agg.matches} match(es) — duplicate scoutings of the same match are averaged together first.</p>` : ""}
       ${agg.excluded ? `<p class="muted" style="margin:10px 0 0">${agg.excluded} match(es) excluded as outliers (${state.outlierSD}σ). These stats use the remaining ${agg.matches}.</p>` : ""}
     </div>
     <div class="card"><h2>Score by match</h2>${CH.line(trend)}</div>
@@ -659,7 +681,7 @@
   /* ============================ EVENTS ==================================== */
   function onClick(e) {
     if (e.target.id === "adminOverlay") { closeAdminModal(); return; } // click backdrop to close
-    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-group],[data-scout],[data-barkey]");
+    const t = e.target.closest("[data-nav],[data-action],[data-step],[data-rate],[data-boolval],[data-choice],[data-team],[data-sort],[data-del],[data-edit],[data-group],[data-scout],[data-barkey]");
     if (!t) return;
     const d = t.dataset;
 
@@ -674,6 +696,7 @@
     }
 
     if (d.nav) {
+      if (state.edit) { state.edit = null; state.form = {}; }  // leaving an edit → discard it
       state.view = d.nav; render();
       // pull everyone's latest when opening a data view (collaborative)
       if (DB.mode() === "cloud" && d.nav !== "scout")
@@ -683,6 +706,12 @@
     if (d.action === "admin") { adminAction(); return; }
     if (d.action === "admin-submit") { submitAdmin(); return; }
     if (d.action === "admin-cancel") { closeAdminModal(); return; }
+    if (d.action === "cancel-edit") {
+      const team = state.edit && state.edit.team;
+      state.edit = null; state.form = {};
+      if (team) { state.team = team; state.view = "team"; }
+      render(); return;
+    }
     if (d.action === "refresh") { doRefresh(); return; }
     if (d.action === "save") { saveMatch(); return; }
     if (d.action === "back") { state.view = "teams"; render(); return; }
@@ -728,6 +757,16 @@
         b.classList.toggle("on", b.dataset.val === state.form[id]));
       return;
     }
+    if (d.edit) {
+      if (!isMain()) return; // only the main admin can edit results
+      const r = DB.all().find((x) => x.id === d.edit);
+      if (!r) return;
+      state.edit = { id: r.id, team: r.team, match: r.match || "", scout: r.scout || "", group: groupOf(r) };
+      state.form = { ...r.values }; delete state.form.__group;
+      state.view = "scout"; render();
+      scheduleTeamLookup(r.team);   // show the team name hint on the prefilled form
+      return;
+    }
     if (d.del) {
       if (!isMain()) return; // only the main admin can delete
       if (confirm("Delete this match record?")) DB.remove(d.del).then(render);
@@ -739,7 +778,7 @@
       render(); return;
     }
     if (d.barkey) { state.detailPhase = state.detailPhase === d.barkey ? null : d.barkey; render(); return; }
-    if (d.team) { state.detailPhase = null; state.team = d.team; state.view = "team"; render(); return; }
+    if (d.team) { state.edit = null; state.detailPhase = null; state.team = d.team; state.view = "team"; render(); return; }
   }
 
   function onInput(e) {

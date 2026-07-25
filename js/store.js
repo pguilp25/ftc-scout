@@ -80,6 +80,23 @@
       return record;
     },
 
+    async update(id, fields) {
+      const idx = cache.findIndex((r) => r.id === id);
+      if (idx < 0) return null;
+      cache[idx] = { ...cache[idx], ...fields };
+      writeLocal(cache);
+      if (useCloud()) {
+        try {
+          await fetch(sbUrl("scouting?id=eq." + encodeURIComponent(id)), {
+            method: "PATCH",
+            headers: { ...sbHeaders(), Prefer: "return=minimal" },
+            body: JSON.stringify(fields),
+          });
+        } catch (e) { console.warn("Cloud update failed (kept locally):", e.message); }
+      }
+      return cache[idx];
+    },
+
     async remove(id) {
       cache = cache.filter((r) => r.id !== id);
       writeLocal(cache);

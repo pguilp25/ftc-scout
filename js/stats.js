@@ -55,51 +55,74 @@
 
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
+  // Numeric interpretation used for the perMetric display averages.
+  // null = not recorded (excluded from the average).
+  function metricDisplay(m, value) {
+    if (value === undefined || value === null || value === "") return null;
+    if (m.type === "rating" || m.type === "number") return isNum(value) ? value : null;
+    if (m.type === "bool") return value ? 1 : 0;      // rate 0..1
+    if (m.type === "select") return metricPoints(m, value);
+    return null; // text
+  }
+
+  // Collapse several scoutings of ONE (team, match) into a single averaged match.
+  function combinedMatch(config, match, recs) {
+    const score = avg(recs.map((r) => matchScore(config, r)));
+    const points = {}, pm = {}, norm = {};
+    config.metrics.forEach((m) => {
+      points[m.id] = avg(recs.map((r) => metricPoints(m, r.values[m.id])));       // avg game points
+      const disp = recs.map((r) => metricDisplay(m, r.values[m.id])).filter((v) => v !== null);
+      pm[m.id] = disp.length ? avg(disp) : null;                                   // avg display value
+      const nr = recs.map((r) => metricNormalized(m, r.values[m.id])).filter((v) => v !== null);
+      norm[m.id] = nr.length ? avg(nr) : null;                                     // avg normalized (for fit)
+    });
+    return { match, records: recs, score, points, pm, norm };
+  }
+
   /* Aggregate every record for one team.
+   * Duplicate scoutings of the same team+match are AVERAGED into one match first,
+   * then matches are averaged — so scouting a match twice doesn't skew the result.
    * opts.outlierSD (>0): drop matches whose total score is more than that many
    * standard deviations from the team's mean (needs >= 3 matches to apply). */
   function aggregateTeam(config, team, records, opts) {
-    let rows = records
-      .filter((r) => r.team === team)
-      .sort((a, b) => (a.match || 0) - (b.match || 0));
+    const teamRecs = records.filter((r) => r.team === team);
+
+    // group scoutings by match (blank match number → its own unique match)
+    const groups = {}, order = [];
+    teamRecs.forEach((r) => {
+      const mk = (r.match != null && String(r.match).trim())
+        ? "m:" + String(r.match).trim().toLowerCase() : "u:" + r.id;
+      if (!groups[mk]) { groups[mk] = { match: r.match || "", recs: [] }; order.push(mk); }
+      groups[mk].recs.push(r);
+    });
+    let matches = order.map((k) => combinedMatch(config, groups[k].match, groups[k].recs));
+    matches.sort((a, b) => String(a.match).localeCompare(String(b.match), undefined, { numeric: true }));
 
     let excluded = 0;
     const sd = opts && opts.outlierSD;
-    if (sd && rows.length >= 3) {
-      const s0 = rows.map((r) => matchScore(config, r));
-      const m = avg(s0), spread = stdev(s0);
+    if (sd && matches.length >= 3) {
+      const s0 = matches.map((mm) => mm.score);
+      const mean = avg(s0), spread = stdev(s0);
       if (spread > 0) {
-        const kept = rows.filter((r) => Math.abs(matchScore(config, r) - m) <= sd * spread);
-        excluded = rows.length - kept.length;
-        rows = kept;
+        const kept = matches.filter((mm) => Math.abs(mm.score - mean) <= sd * spread);
+        excluded = matches.length - kept.length;
+        matches = kept;
       }
     }
 
-    const scores = rows.map((r) => matchScore(config, r));
-
-    // per-metric average of the numeric interpretation (points-equivalent)
+    const scores = matches.map((mm) => mm.score);
     const perMetric = {};
     config.metrics.forEach((m) => {
-      const vals = rows
-        .map((r) => r.values[m.id])
-        .filter((v) => v !== undefined && v !== null && v !== "");
-      if (m.type === "rating") {
-        perMetric[m.id] = avg(vals.filter(isNum));
-      } else if (m.type === "number") {
-        perMetric[m.id] = avg(vals.filter(isNum));
-      } else if (m.type === "bool") {
-        perMetric[m.id] = vals.length ? avg(vals.map((v) => (v ? 1 : 0))) : 0; // rate 0..1
-      } else if (m.type === "select") {
-        perMetric[m.id] = avg(vals.map((v) => metricPoints(m, v)));
-      } else {
-        perMetric[m.id] = null; // text
-      }
+      const vals = matches.map((mm) => mm.pm[m.id]).filter((v) => v !== null && v !== undefined);
+      perMetric[m.id] = vals.length ? avg(vals) : (m.type === "text" ? null : 0);
     });
 
     return {
       team,
-      matches: rows.length,
-      records: rows,
+      matches: matches.length,
+      scoutings: teamRecs.length,
+      records: teamRecs,        // raw scoutings (for the editable match log)
+      combinedMatches: matches,
       scores,
       avgScore: avg(scores),
       maxScore: scores.length ? Math.max(...scores) : 0,
@@ -124,14 +147,13 @@
   /* Weighted "fit for our robot" score, 0..100, using live weights.
    * weights: { metricId: number }  (falls back to the config default weight) */
   function fitScore(config, teamAgg, weights) {
+    const matches = teamAgg.combinedMatches || [];
     let total = 0, wsum = 0;
     config.metrics.forEach((m) => {
       const w = weights && weights[m.id] != null ? weights[m.id] : (m.weight || 0);
       if (!w) return;
-      // average the per-record normalized value across this team's matches
-      const norms = teamAgg.records
-        .map((r) => metricNormalized(m, r.values[m.id]))
-        .filter((n) => n !== null);
+      // average the per-MATCH normalized value (duplicates already averaged in)
+      const norms = matches.map((mm) => mm.norm[m.id]).filter((n) => n !== null && n !== undefined);
       if (!norms.length) return;
       total += w * avg(norms);
       wsum += w;
